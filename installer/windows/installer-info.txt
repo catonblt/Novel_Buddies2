@@ -1,0 +1,33 @@
+Thank you for installing Novel Writer!
+
+SYSTEM REQUIREMENTS:
+- Windows 10 or later
+- 500 MB free disk space
+- Administrator privileges
+- Internet connection (for AI features)
+
+WHAT WILL BE INSTALLED:
+- Novel Writer application
+- Python backend (bundled)
+- Desktop shortcut
+- Start menu entries
+
+PREREQUISITE SOFTWARE:
+The installer will check for and install if needed:
+- WebView2 Runtime (required for the UI)
+
+FIRST-TIME SETUP:
+After installation:
+1. Launch Novel Writer from your desktop or Start menu
+2. Click the Settings icon (⚙️)
+3. Enter your Anthropic API Key
+   - Get one free at: https://console.anthropic.com
+4. Click "Save Settings"
+5. Create your first project!
+
+NEED HELP?
+- Quick Start Guide: Will be installed in the docs folder
+- GitHub Issues: https://github.com/yourusername/novel-writer/issues
+- Documentation: https://github.com/yourusername/novel-writer
+
+Click Next to continue...

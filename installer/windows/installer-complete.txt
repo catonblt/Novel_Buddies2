@@ -1,0 +1,61 @@
+✨ Novel Writer has been installed successfully!
+
+WHAT'S NEXT:
+
+1. GET YOUR API KEY:
+   Visit: https://console.anthropic.com
+   - Create a free account
+   - Generate an API key
+   - Copy it for the next step
+
+2. LAUNCH THE APPLICATION:
+   - Desktop shortcut: "Novel Writer"
+   - Start Menu: Programs > Novel Writer
+
+3. CONFIGURE API KEY:
+   - Click the Settings icon (⚙️)
+   - Paste your Anthropic API key
+   - Click "Save Settings"
+
+4. CREATE YOUR FIRST PROJECT:
+   - Click "Create New Project"
+   - Fill in your novel details
+   - Start writing with AI agents!
+
+INSTALLED FILES:
+- Application: {app}\Novel Writer.exe
+- Backend: {app}\backend\
+- Documentation: {app}\docs\
+- Installation Log: {app}\logs\installation.log
+
+TROUBLESHOOTING:
+If the application doesn't start:
+1. Check the installation log at:
+   {app}\logs\installation.log
+
+2. Verify WebView2 is installed:
+   Go to: edge://settings/help
+
+3. Run as Administrator:
+   Right-click Novel Writer and select "Run as administrator"
+
+4. Check Windows Defender:
+   The app is safe - you may need to allow it
+
+DOCUMENTATION:
+- Quick Start: {app}\docs\QUICK_START.txt
+- README: {app}\docs\README.txt
+- Online Help: https://github.com/yourusername/novel-writer
+
+UNINSTALLING:
+To remove Novel Writer:
+- Windows Settings > Apps > Novel Writer > Uninstall
+Or
+- Start Menu > Novel Writer > Uninstall Novel Writer
+
+FEEDBACK:
+We'd love to hear from you!
+- Report issues: https://github.com/yourusername/novel-writer/issues
+- Suggest features: https://github.com/yourusername/novel-writer/discussions
+
+Happy Writing! 📝✨

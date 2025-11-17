@@ -1,0 +1,156 @@
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+import anthropic
+import uuid
+import time
+import os
+import json
+from typing import AsyncGenerator
+
+from models.database import Project, Message, get_db
+from agents.prompts import AGENT_SYSTEM_PROMPTS
+
+router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    project_id: str
+    message: str
+    agent_type: str
+    api_key: str
+
+
+async def stream_claude_response(
+    project: Project,
+    user_message: str,
+    agent_type: str,
+    api_key: str,
+    db: Session
+) -> AsyncGenerator[str, None]:
+    """Stream responses from Claude API"""
+
+    if agent_type not in AGENT_SYSTEM_PROMPTS:
+        raise HTTPException(status_code=400, detail=f"Invalid agent type: {agent_type}")
+
+    system_prompt = AGENT_SYSTEM_PROMPTS[agent_type]
+
+    # Add project context to the system prompt
+    project_context = f"""
+
+PROJECT CONTEXT:
+- Title: {project.title}
+- Author: {project.author}
+- Genre: {project.genre}
+- Project Path: {project.path}
+- Premise: {project.premise or 'Not yet defined'}
+- Themes: {project.themes or 'Not yet defined'}
+- Setting: {project.setting or 'Not yet defined'}
+
+You can read and write files in the project directory. When you create or update files, specify the full path relative to the project root.
+"""
+
+    full_system_prompt = system_prompt + project_context
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+
+        # Get conversation history
+        messages = db.query(Message).filter(
+            Message.project_id == project.id
+        ).order_by(Message.timestamp.asc()).all()
+
+        conversation = []
+        for msg in messages:
+            conversation.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+
+        # Add current user message
+        conversation.append({
+            "role": "user",
+            "content": user_message
+        })
+
+        # Save user message to database
+        user_msg = Message(
+            id=str(uuid.uuid4()),
+            project_id=project.id,
+            role="user",
+            content=user_message,
+            timestamp=int(time.time())
+        )
+        db.add(user_msg)
+        db.commit()
+
+        # Stream response from Claude
+        assistant_response = ""
+
+        with client.messages.stream(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=4096,
+            system=full_system_prompt,
+            messages=conversation,
+        ) as stream:
+            for text in stream.text_stream:
+                assistant_response += text
+                # Send chunk to frontend
+                yield f"data: {json.dumps({'type': 'content', 'content': text})}\n\n"
+
+        # Save assistant message to database
+        assistant_msg = Message(
+            id=str(uuid.uuid4()),
+            project_id=project.id,
+            role="assistant",
+            content=assistant_response,
+            agent_type=agent_type,
+            timestamp=int(time.time())
+        )
+        db.add(assistant_msg)
+        db.commit()
+
+        # Send completion signal
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    except Exception as e:
+        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+
+@router.post("")
+async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    """Chat with an AI agent"""
+
+    project = db.query(Project).filter(Project.id == request.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return StreamingResponse(
+        stream_claude_response(project, request.message, request.agent_type, request.api_key, db),
+        media_type="text/event-stream"
+    )
+
+
+@router.get("/{project_id}/messages")
+async def get_messages(project_id: str, db: Session = Depends(get_db)):
+    """Get conversation history for a project"""
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    messages = db.query(Message).filter(
+        Message.project_id == project_id
+    ).order_by(Message.timestamp.asc()).all()
+
+    return [
+        {
+            "id": msg.id,
+            "role": msg.role,
+            "content": msg.content,
+            "agentType": msg.agent_type,
+            "timestamp": msg.timestamp
+        }
+        for msg in messages
+    ]

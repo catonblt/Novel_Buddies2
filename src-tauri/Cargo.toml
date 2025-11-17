@@ -1,0 +1,22 @@
+[package]
+name = "novel-writer"
+version = "1.0.0"
+description = "A streamlined desktop application for collaborative novel writing with AI agents"
+authors = ["Novel Writer Team"]
+license = ""
+repository = ""
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = [ "shell-sidecar", "path-all", "dialog-all", "fs-all", "shell-open"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+git2 = "0.18"
+walkdir = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

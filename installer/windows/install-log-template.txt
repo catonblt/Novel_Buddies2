@@ -1,0 +1,19 @@
+Installation started at: {TIMESTAMP}
+
+This log file tracks all installation steps and any errors that occur.
+If installation fails, this file will help diagnose the problem.
+
+=== SYSTEM INFORMATION ===
+(Will be populated during installation)
+
+=== INSTALLATION STEPS ===
+(Installation progress will be logged here)
+
+=== ERRORS AND WARNINGS ===
+(Any issues will be listed here)
+
+=== VALIDATION RESULTS ===
+(Post-installation checks will be recorded here)
+
+For support, please share this log file at:
+https://github.com/yourusername/novel-writer/issues
