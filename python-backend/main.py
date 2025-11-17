@@ -54,10 +54,18 @@ async def log_requests(request: Request, call_next):
         )
         raise
 
-# CORS middleware
+# CORS middleware - Allow all localhost variations for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:1420", "tauri://localhost"],
+    allow_origins=[
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+        "http://localhost:5173",  # Vite default port
+        "http://127.0.0.1:5173",
+        "tauri://localhost",
+        "http://localhost",
+        "http://127.0.0.1"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
