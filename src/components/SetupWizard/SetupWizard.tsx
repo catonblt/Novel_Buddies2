@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
+import { logger } from '@/lib/logger';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface SetupWizardProps {
   onComplete: () => void;
@@ -31,6 +33,7 @@ const GENRES = [
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { setCurrentProject } = useStore();
 
   // Form state
@@ -46,33 +49,60 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [keyCharacters, setKeyCharacters] = useState('');
 
   const handleSelectPath = async () => {
+    logger.userAction('select_project_path', { title });
+    setError(null);
+
     try {
       // Use Tauri dialog to select directory
       const selected = await invoke<string>('select_directory');
       if (selected) {
         // Append project name to path
         const sanitizedTitle = title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-        setProjectPath(`${selected}/${sanitizedTitle}`);
+        const fullPath = `${selected}/${sanitizedTitle}`;
+        setProjectPath(fullPath);
+        logger.info('Project path selected', { path: fullPath });
       }
     } catch (error) {
-      // Fallback for development/testing
-      const sanitizedTitle = title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-      const homedir = process.env.HOME || process.env.USERPROFILE || '~';
-      setProjectPath(`${homedir}/NovelProjects/${sanitizedTitle}`);
+      logger.error('Failed to select directory', error as Error);
+
+      // Try to get home directory as fallback
+      try {
+        const homeDir = await invoke<string>('get_home_dir');
+        const sanitizedTitle = title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+        const fallbackPath = `${homeDir}/NovelProjects/${sanitizedTitle}`;
+        setProjectPath(fallbackPath);
+        logger.info('Using fallback project path', { path: fallbackPath });
+      } catch (homeDirError) {
+        logger.error('Failed to get home directory', homeDirError as Error);
+        setError('Could not determine project location. Please enter path manually.');
+      }
     }
   };
 
   const handleCreateProject = async () => {
     setIsLoading(true);
+    setError(null);
+    logger.userAction('create_project_start', { title, author, genre });
 
     try {
       // Generate project path if not set
       let finalPath = projectPath;
       if (!finalPath) {
+        logger.info('No project path set, determining default path');
         const sanitizedTitle = title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-        const homedir = process.env.HOME || process.env.USERPROFILE || '~';
-        finalPath = `${homedir}/NovelProjects/${sanitizedTitle}`;
+
+        try {
+          // Use Tauri command to get home directory
+          const homeDir = await invoke<string>('get_home_dir');
+          finalPath = `${homeDir}/NovelProjects/${sanitizedTitle}`;
+          logger.info('Using home directory for project', { path: finalPath });
+        } catch (homeDirError) {
+          logger.error('Failed to get home directory', homeDirError as Error);
+          throw new Error('Could not determine project location. Please select a path manually.');
+        }
       }
+
+      logger.info('Creating project', { title, path: finalPath });
 
       const project = await api.createProject({
         title,
@@ -86,25 +116,38 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         keyCharacters,
       });
 
-      // Initialize git repository
+      logger.info('Project created successfully', { projectId: project.id });
+
+      // Initialize git repository (don't fail project creation if this fails)
       try {
+        logger.info('Initializing git repository', { path: finalPath });
         const response = await fetch('http://localhost:8000/git/init', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repo_path: finalPath }),
         });
+
         if (!response.ok) {
-          console.error('Failed to initialize git repository');
+          logger.warn('Failed to initialize git repository', { status: response.status });
+        } else {
+          logger.info('Git repository initialized successfully');
         }
       } catch (gitError) {
-        console.error('Git initialization error:', gitError);
+        logger.warn('Git initialization error (non-fatal)', gitError as Error);
+        // Don't fail the entire project creation if git init fails
       }
 
       setCurrentProject(project);
+      logger.userAction('create_project_success', { projectId: project.id });
       onComplete();
     } catch (error) {
-      console.error('Failed to create project:', error);
-      alert('Failed to create project. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      logger.error('Failed to create project', error as Error, {
+        title,
+        author,
+        genre,
+      });
+      setError(`Failed to create project: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
@@ -125,6 +168,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
           {step === 1 ? (
             <>
               <div className="space-y-2">

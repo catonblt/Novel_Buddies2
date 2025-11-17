@@ -22,6 +22,27 @@ fn check_backend_health() -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+async fn select_directory() -> Result<String, String> {
+    use tauri::api::dialog::blocking::FileDialogBuilder;
+
+    match FileDialogBuilder::new()
+        .set_title("Select Project Location")
+        .pick_folder()
+    {
+        Some(path) => Ok(path.to_string_lossy().to_string()),
+        None => Err("No directory selected".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_home_dir() -> Result<String, String> {
+    match dirs::home_dir() {
+        Some(path) => Ok(path.to_string_lossy().to_string()),
+        None => Err("Could not determine home directory".to_string()),
+    }
+}
+
 fn start_backend_server(app_handle: tauri::AppHandle) {
     std::thread::spawn(move || {
         // In production, use the sidecar binary
@@ -82,7 +103,9 @@ fn main() {
             git_log,
             git_diff,
             restore_file_version,
-            check_backend_health
+            check_backend_health,
+            select_directory,
+            get_home_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,39 +1,67 @@
 import { Project, Message, AgentType } from './types';
+import { logger } from './logger';
 
 const API_BASE_URL = 'http://localhost:8000';
+
+/**
+ * Wrapper for API calls with logging and error handling
+ */
+async function apiCall<T>(
+  method: string,
+  url: string,
+  options?: RequestInit,
+  body?: any
+): Promise<T> {
+  const fullUrl = `${API_BASE_URL}${url}`;
+  const startTime = performance.now();
+
+  // Log request
+  logger.apiRequest(method, fullUrl, body);
+
+  try {
+    const response = await fetch(fullUrl, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body && { body: JSON.stringify(body) }),
+      ...options,
+    });
+
+    const duration = performance.now() - startTime;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.apiResponse(method, fullUrl, response.status, duration, errorText);
+      throw new Error(`API call failed: ${response.status} ${errorText}`);
+    }
+
+    logger.apiResponse(method, fullUrl, response.status, duration);
+
+    return response.json();
+  } catch (error) {
+    const duration = performance.now() - startTime;
+    logger.apiError(method, fullUrl, error as Error);
+    throw error;
+  }
+}
 
 export const api = {
   // Project operations
   async createProject(projectData: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> {
-    const response = await fetch(`${API_BASE_URL}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(projectData),
-    });
-    if (!response.ok) throw new Error('Failed to create project');
-    return response.json();
+    logger.userAction('create_project', { title: projectData.title });
+    return apiCall<Project>('POST', '/projects', undefined, projectData);
   },
 
   async getProject(id: string): Promise<Project> {
-    const response = await fetch(`${API_BASE_URL}/projects/${id}`);
-    if (!response.ok) throw new Error('Failed to get project');
-    return response.json();
+    return apiCall<Project>('GET', `/projects/${id}`);
   },
 
   async listProjects(): Promise<Project[]> {
-    const response = await fetch(`${API_BASE_URL}/projects`);
-    if (!response.ok) throw new Error('Failed to list projects');
-    return response.json();
+    return apiCall<Project[]>('GET', '/projects');
   },
 
   async updateProject(id: string, data: Partial<Project>): Promise<Project> {
-    const response = await fetch(`${API_BASE_URL}/projects/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to update project');
-    return response.json();
+    logger.userAction('update_project', { id, fields: Object.keys(data) });
+    return apiCall<Project>('PATCH', `/projects/${id}`, undefined, data);
   },
 
   // Agent chat
@@ -43,76 +71,95 @@ export const api = {
     agentType: AgentType,
     apiKey: string
   ): Promise<ReadableStream<Uint8Array>> {
-    const response = await fetch(`${API_BASE_URL}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: projectId,
-        message,
-        agent_type: agentType,
-        api_key: apiKey,
-      }),
+    const fullUrl = `${API_BASE_URL}/chat`;
+    const startTime = performance.now();
+
+    logger.agentInteraction(agentType, 'send_message', {
+      project_id: projectId,
+      message_length: message.length,
     });
-    if (!response.ok) throw new Error('Failed to send message');
-    if (!response.body) throw new Error('No response body');
-    return response.body;
+
+    logger.apiRequest('POST', fullUrl, {
+      project_id: projectId,
+      agent_type: agentType,
+    });
+
+    try {
+      const response = await fetch(fullUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          message,
+          agent_type: agentType,
+          api_key: apiKey,
+        }),
+      });
+
+      const duration = performance.now() - startTime;
+
+      if (!response.ok) {
+        logger.apiResponse('POST', fullUrl, response.status, duration, 'Failed to send message');
+        throw new Error('Failed to send message');
+      }
+
+      if (!response.body) {
+        logger.apiResponse('POST', fullUrl, response.status, duration, 'No response body');
+        throw new Error('No response body');
+      }
+
+      logger.apiResponse('POST', fullUrl, response.status, duration);
+      return response.body;
+    } catch (error) {
+      logger.apiError('POST', fullUrl, error as Error);
+      throw error;
+    }
   },
 
   // Conversation history
   async getMessages(projectId: string): Promise<Message[]> {
-    const response = await fetch(`${API_BASE_URL}/projects/${projectId}/messages`);
-    if (!response.ok) throw new Error('Failed to get messages');
-    return response.json();
+    return apiCall<Message[]>('GET', `/chat/${projectId}/messages`);
   },
 
   // File operations
   async listFiles(projectPath: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/files/list`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: projectPath }),
-    });
-    if (!response.ok) throw new Error('Failed to list files');
-    return response.json();
+    logger.fileOperation('list', projectPath, true);
+    return apiCall<any>('POST', '/files/list', undefined, { path: projectPath });
   },
 
   async readFile(filePath: string): Promise<string> {
-    const response = await fetch(`${API_BASE_URL}/files/read`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath }),
-    });
-    if (!response.ok) throw new Error('Failed to read file');
-    const data = await response.json();
-    return data.content;
+    try {
+      const data = await apiCall<{ content: string }>('POST', '/files/read', undefined, { path: filePath });
+      logger.fileOperation('read', filePath, true);
+      return data.content;
+    } catch (error) {
+      logger.fileOperation('read', filePath, false, (error as Error).message);
+      throw error;
+    }
   },
 
   async writeFile(filePath: string, content: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/files/write`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath, content }),
-    });
-    if (!response.ok) throw new Error('Failed to write file');
+    try {
+      await apiCall<void>('POST', '/files/write', undefined, { path: filePath, content });
+      logger.fileOperation('write', filePath, true);
+    } catch (error) {
+      logger.fileOperation('write', filePath, false, (error as Error).message);
+      throw error;
+    }
   },
 
   // Git operations
   async getCommitHistory(projectPath: string, maxCount: number = 20): Promise<any[]> {
-    const response = await fetch(`${API_BASE_URL}/git/log`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_path: projectPath, max_count: maxCount }),
-    });
-    if (!response.ok) throw new Error('Failed to get commit history');
-    return response.json();
+    logger.debug('Getting commit history', { projectPath, maxCount });
+    return apiCall<any[]>('POST', '/git/log', undefined, { repo_path: projectPath, max_count: maxCount });
   },
 
   async restoreFileVersion(projectPath: string, filePath: string, commitId: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/git/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_path: projectPath, file_path: filePath, commit_id: commitId }),
+    logger.userAction('restore_file_version', { filePath, commitId });
+    await apiCall<void>('POST', '/git/restore', undefined, {
+      repo_path: projectPath,
+      file_path: filePath,
+      commit_id: commitId,
     });
-    if (!response.ok) throw new Error('Failed to restore file version');
   },
 };
