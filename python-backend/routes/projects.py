@@ -210,7 +210,8 @@ Track changes and revisions made to the manuscript.
     for file_path, content in files.items():
         full_path = os.path.join(path, file_path)
         try:
-            with open(full_path, 'w') as f:
+            # Use UTF-8 encoding to support Unicode characters on all platforms (especially Windows)
+            with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.log_file_operation("write", full_path, True, {"size": len(content)})
         except Exception as e:
@@ -227,7 +228,10 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     # Check if path already exists
     if os.path.exists(project.path):
         logger.error(f"Project path already exists: {project.path}")
-        raise HTTPException(status_code=400, detail="Project path already exists")
+        raise HTTPException(
+            status_code=400,
+            detail=f"A project already exists at this location: {project.path}. Please choose a different name or delete the existing folder."
+        )
 
     # Create project in database
     project_id = str(uuid.uuid4())
