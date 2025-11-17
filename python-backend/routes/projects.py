@@ -227,7 +227,10 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     # Check if path already exists
     if os.path.exists(project.path):
         logger.error(f"Project path already exists: {project.path}")
-        raise HTTPException(status_code=400, detail="Project path already exists")
+        raise HTTPException(
+            status_code=400,
+            detail=f"A project already exists at this location: {project.path}. Please choose a different name or delete the existing folder."
+        )
 
     # Create project in database
     project_id = str(uuid.uuid4())
