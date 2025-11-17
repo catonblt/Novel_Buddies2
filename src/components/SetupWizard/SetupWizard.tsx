@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { logger } from '@/lib/logger';
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -34,6 +34,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [backendHealthy, setBackendHealthy] = useState<boolean | null>(null);
   const { setCurrentProject } = useStore();
 
   // Form state
@@ -47,6 +48,29 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [themes, setThemes] = useState('');
   const [setting, setSetting] = useState('');
   const [keyCharacters, setKeyCharacters] = useState('');
+
+  // Check backend health on mount
+  useEffect(() => {
+    checkBackendHealth();
+  }, []);
+
+  const checkBackendHealth = async () => {
+    logger.info('Checking backend health...');
+    try {
+      const response = await api.checkHealth();
+      if (response.status === 'healthy') {
+        setBackendHealthy(true);
+        logger.info('Backend is healthy');
+      } else {
+        setBackendHealthy(false);
+        logger.warn('Backend responded but status is not healthy', { response });
+      }
+    } catch (error) {
+      setBackendHealthy(false);
+      logger.error('Backend health check failed', error as Error);
+      setError('Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000');
+    }
+  };
 
   const handleSelectPath = async () => {
     logger.userAction('select_project_path', { title });
@@ -168,6 +192,33 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {/* Backend health status */}
+          {backendHealthy === false && (
+            <Alert variant="destructive">
+              <XCircle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>Backend server is not responding. Please start it on port 8000.</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={checkBackendHealth}
+                  className="ml-2"
+                >
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {backendHealthy === true && (
+            <Alert>
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertDescription className="text-green-600">
+                Backend server is running and healthy
+              </AlertDescription>
+            </Alert>
+          )}
+
           {error && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -303,7 +354,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               Next
             </Button>
           ) : (
-            <Button onClick={handleCreateProject} disabled={isLoading} className="ml-auto">
+            <Button
+              onClick={handleCreateProject}
+              disabled={isLoading || backendHealthy !== true}
+              className="ml-auto"
+            >
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create Project
             </Button>

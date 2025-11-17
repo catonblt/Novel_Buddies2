@@ -38,12 +38,34 @@ async function apiCall<T>(
 
     return response.json();
   } catch (error) {
-    logger.apiError(method, fullUrl, error as Error);
+    const duration = performance.now() - startTime;
+
+    // Enhanced error logging with more details
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      logger.error('Network error: Cannot connect to backend', error as Error, {
+        url: fullUrl,
+        method,
+        possibleCauses: [
+          'Backend server not running',
+          'CORS blocked',
+          'Network connectivity issue',
+          'Backend URL incorrect'
+        ]
+      });
+    } else {
+      logger.apiError(method, fullUrl, error as Error, { duration });
+    }
+
     throw error;
   }
 }
 
 export const api = {
+  // Health check
+  async checkHealth(): Promise<{ status: string }> {
+    return apiCall<{ status: string }>('GET', '/health');
+  },
+
   // Project operations
   async createProject(projectData: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> {
     logger.userAction('create_project', { title: projectData.title });
