@@ -23,7 +23,8 @@ class Logger {
 
   constructor() {
     // Set log level based on environment
-    if (import.meta.env.DEV) {
+    // @ts-ignore - Vite specific, may not exist in all environments
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
       this.logLevel = LogLevel.DEBUG;
     }
 

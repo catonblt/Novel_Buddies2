@@ -38,7 +38,6 @@ async function apiCall<T>(
 
     return response.json();
   } catch (error) {
-    const duration = performance.now() - startTime;
     logger.apiError(method, fullUrl, error as Error);
     throw error;
   }
