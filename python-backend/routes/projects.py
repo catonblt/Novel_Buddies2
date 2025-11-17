@@ -210,7 +210,8 @@ Track changes and revisions made to the manuscript.
     for file_path, content in files.items():
         full_path = os.path.join(path, file_path)
         try:
-            with open(full_path, 'w') as f:
+            # Use UTF-8 encoding to support Unicode characters on all platforms (especially Windows)
+            with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.log_file_operation("write", full_path, True, {"size": len(content)})
         except Exception as e:
