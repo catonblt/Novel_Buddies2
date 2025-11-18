@@ -17,7 +17,7 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  agentType?: AgentType;
+  agentType?: string;
   timestamp: number;
   fileChanges?: FileChange[];
 }
@@ -28,15 +28,7 @@ export interface FileChange {
   wordsChanged?: number;
 }
 
-export type AgentType =
-  | 'story-architect'
-  | 'character-specialist'
-  | 'prose-writer'
-  | 'research-continuity'
-  | 'editorial-reviewer';
-
 export interface Agent {
-  type: AgentType;
   name: string;
   icon: string;
   color: string;
@@ -65,4 +57,9 @@ export interface AppSettings {
   autoSave: boolean;
   autoCommit: boolean;
   autonomyLevel: number; // 0-100
+}
+
+export interface AgentStatus {
+  agent: string;
+  message: string;
 }

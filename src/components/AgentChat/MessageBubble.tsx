@@ -1,5 +1,5 @@
 import { Message } from '@/lib/types';
-import { AGENTS } from '@/lib/agents';
+import { AGENT_INFO, STORY_ADVOCATE } from '@/lib/agents';
 import { formatDate } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -9,7 +9,18 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
-  const agent = message.agentType ? AGENTS[message.agentType] : null;
+
+  // Get agent info from the new AGENT_INFO map
+  const getAgentDisplay = (agentType?: string) => {
+    if (!agentType) return null;
+    return AGENT_INFO[agentType] || {
+      name: 'Assistant',
+      icon: '🤖',
+      color: '#6b7280'
+    };
+  };
+
+  const agent = getAgentDisplay(message.agentType);
 
   return (
     <div className={cn('flex gap-3', isUser && 'flex-row-reverse')}>
@@ -60,9 +71,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                     change.type === 'deleted' && 'text-red-500'
                   )}
                 >
-                  {change.type === 'created' && '✓ Created'}
-                  {change.type === 'modified' && '± Modified'}
-                  {change.type === 'deleted' && '✗ Deleted'}
+                  {change.type === 'created' && '+ Created'}
+                  {change.type === 'modified' && '~ Modified'}
+                  {change.type === 'deleted' && '- Deleted'}
                 </span>
                 <span className="font-mono">{change.path}</span>
                 {change.wordsChanged && (

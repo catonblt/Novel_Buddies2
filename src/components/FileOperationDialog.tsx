@@ -11,8 +11,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { FileText, FilePlus, FileEdit, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
-import { AGENTS } from '@/lib/agents';
-import { AgentType } from '@/lib/types';
+import { AGENT_INFO } from '@/lib/agents';
 
 export interface FileOperation {
   type: 'create' | 'update' | 'delete';
@@ -28,7 +27,7 @@ interface FileOperationDialogProps {
   isOpen: boolean;
   onConfirm: (operations: FileOperation[]) => void;
   onReject: () => void;
-  agentType: AgentType;
+  agentType: string;
 }
 
 export default function FileOperationDialog({
@@ -78,15 +77,20 @@ export default function FileOperationDialog({
     }
   };
 
-  const agentInfo = AGENTS[agentType];
+  // Get agent info from the AGENT_INFO map
+  const agentInfo = AGENT_INFO[agentType] || {
+    name: 'Story Advocate',
+    icon: '🎭',
+    color: '#8b5cf6'
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onReject()}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <span>{agentInfo?.icon}</span>
-            {agentInfo?.name || 'Agent'} wants to modify files
+            <span>{agentInfo.icon}</span>
+            {agentInfo.name} wants to modify files
           </DialogTitle>
           <DialogDescription>
             Review and approve the following {operations.length} file operation{operations.length !== 1 ? 's' : ''}

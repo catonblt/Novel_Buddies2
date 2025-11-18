@@ -1,4 +1,4 @@
-import { Project, Message, AgentType } from './types';
+import { Project, Message } from './types';
 import { logger } from './logger';
 import { API_BASE_URL } from './config';
 
@@ -84,11 +84,10 @@ export const api = {
     return apiCall<Project>('PATCH', `/projects/${id}`, undefined, data);
   },
 
-  // Agent chat
+  // Agent chat - now routes through Story Advocate
   async sendMessage(
     projectId: string,
     message: string,
-    agentType: AgentType,
     apiKey: string,
     model: string,
     autonomyLevel: number = 50
@@ -96,7 +95,7 @@ export const api = {
     const fullUrl = `${API_BASE_URL}/chat`;
     const startTime = performance.now();
 
-    logger.agentInteraction(agentType, 'send_message', {
+    logger.agentInteraction('story_advocate', 'send_message', {
       project_id: projectId,
       message_length: message.length,
       model,
@@ -105,7 +104,6 @@ export const api = {
 
     logger.apiRequest('POST', fullUrl, {
       project_id: projectId,
-      agent_type: agentType,
       model,
       autonomy_level: autonomyLevel,
     });
@@ -117,7 +115,6 @@ export const api = {
         body: JSON.stringify({
           project_id: projectId,
           message,
-          agent_type: agentType,
           api_key: apiKey,
           model,
           autonomy_level: autonomyLevel,

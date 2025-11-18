@@ -1,15 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
-import { AGENTS } from '@/lib/agents';
+import { STORY_ADVOCATE, AGENT_INFO } from '@/lib/agents';
 import { getApiUrl } from '@/lib/config';
-import { AgentType, Message } from '@/lib/types';
+import { Message, AgentStatus } from '@/lib/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Send, Loader2 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
-import AgentSelector from './AgentSelector';
 import FileOperationDialog, { FileOperation } from '@/components/FileOperationDialog';
 import { fileSystemWS } from '@/lib/websocket';
 
@@ -17,7 +16,7 @@ export default function AgentChat() {
   const { currentProject, messages, addMessage, settings, triggerFileRefresh, addNotification } = useStore();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<AgentType>('story-architect');
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // File operation state
@@ -75,12 +74,12 @@ export default function AgentChat() {
     addMessage(userMessage);
     setInput('');
     setIsStreaming(true);
+    setAgentStatus({ agent: 'story_advocate', message: 'Processing...' });
 
     try {
       const stream = await api.sendMessage(
         currentProject.id,
         input,
-        selectedAgent,
         settings.apiKey,
         settings.model,
         settings.autonomyLevel
@@ -102,7 +101,13 @@ export default function AgentChat() {
             try {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === 'content') {
+              if (data.type === 'status') {
+                // Update status toast
+                setAgentStatus({
+                  agent: data.agent || 'story_advocate',
+                  message: data.message
+                });
+              } else if (data.type === 'content') {
                 assistantContent += data.content;
               } else if (data.type === 'file_operations') {
                 // Handle file operations from agent
@@ -119,13 +124,15 @@ export default function AgentChat() {
                   id: Date.now().toString(),
                   role: 'assistant',
                   content: assistantContent,
-                  agentType: selectedAgent,
+                  agentType: 'story_advocate',
                   timestamp: Math.floor(Date.now() / 1000),
                 };
                 addMessage(assistantMessage);
+                setAgentStatus(null);
               } else if (data.type === 'error') {
                 console.error('Streaming error:', data.error);
                 alert(`Error: ${data.error}`);
+                setAgentStatus(null);
               }
             } catch (e) {
               // Ignore parsing errors for incomplete chunks
@@ -136,6 +143,7 @@ export default function AgentChat() {
     } catch (error) {
       console.error('Failed to send message:', error);
       alert('Failed to send message. Please check your connection.');
+      setAgentStatus(null);
     } finally {
       setIsStreaming(false);
     }
@@ -205,6 +213,11 @@ export default function AgentChat() {
     }
   };
 
+  // Get agent display info
+  const getAgentDisplay = (agentKey: string) => {
+    return AGENT_INFO[agentKey] || { name: agentKey, icon: '🤖', color: '#6b7280' };
+  };
+
   return (
     <>
       <div className="flex h-full flex-col">
@@ -216,7 +229,10 @@ export default function AgentChat() {
                 <div>
                   <p className="text-lg font-semibold">Start a conversation</p>
                   <p className="mt-2 text-sm">
-                    Select an agent below and describe what you'd like to work on.
+                    Tell the Story Advocate what you'd like to work on.
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    The right agents will automatically contribute to your request.
                   </p>
                 </div>
               </div>
@@ -225,25 +241,44 @@ export default function AgentChat() {
                 <MessageBubble key={message.id} message={message} />
               ))
             )}
-            {isStreaming && (
+            {isStreaming && agentStatus && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>{AGENTS[selectedAgent].name} is thinking...</span>
+                <span>{agentStatus.message}</span>
               </div>
             )}
           </div>
         </ScrollArea>
 
+        {/* Status Toast - shows which agent is working */}
+        {agentStatus && (
+          <div className="mx-4 mb-2">
+            <div
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
+              style={{
+                backgroundColor: getAgentDisplay(agentStatus.agent).color + '15',
+                borderLeft: `3px solid ${getAgentDisplay(agentStatus.agent).color}`,
+              }}
+            >
+              <span>{getAgentDisplay(agentStatus.agent).icon}</span>
+              <span className="font-medium" style={{ color: getAgentDisplay(agentStatus.agent).color }}>
+                {getAgentDisplay(agentStatus.agent).name}
+              </span>
+              <span className="text-muted-foreground">
+                {agentStatus.message}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Input Area */}
         <div className="border-t border-border p-4">
-          <AgentSelector selected={selectedAgent} onSelect={setSelectedAgent} />
-
-          <div className="mt-3 flex gap-2">
+          <div className="flex gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyPress}
-              placeholder={`Message ${AGENTS[selectedAgent].name}...`}
+              placeholder={`Message ${STORY_ADVOCATE.name}...`}
               className="min-h-[80px] resize-none"
               disabled={isStreaming}
             />
@@ -265,7 +300,7 @@ export default function AgentChat() {
         isOpen={showFileOpDialog}
         onConfirm={handleFileOpConfirm}
         onReject={handleFileOpReject}
-        agentType={selectedAgent}
+        agentType="story_advocate"
       />
     </>
   );
