@@ -7,7 +7,9 @@ import uuid
 import time
 import os
 import json
-from typing import AsyncGenerator, List, Dict
+from typing import AsyncGenerator, List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from pathlib import Path
 
 from models.database import Project, Message, AgentAnalysis, ContentVersion, get_db
 from agents.orchestrator import (
@@ -24,6 +26,301 @@ from utils.logger import logger
 from routes.file_operations import parse_file_operations
 
 router = APIRouter()
+
+
+@dataclass
+class FileEntry:
+    """Represents a file entry with metadata for bucket prioritization."""
+    rel_path: str
+    content: str
+    tokens: int
+    mtime: float
+    bucket: str  # 'critical', 'context', 'reference'
+
+
+class TokenBudgetLoader:
+    """
+    Token-aware context loader that uses Anthropic's tokenizer for accurate
+    token counting and implements Smart Bucket priority loading.
+
+    Bucket A (Critical): Always include planning/story-outline.md and most recently
+                         modified .md file in manuscript/chapters
+    Bucket B (Context): Include story-bible files until 80% of budget
+    Bucket C (Reference): Include other chapters if space permits
+    """
+
+    # Default token budget for Claude Sonnet (leaving room for response)
+    DEFAULT_MAX_TOKENS = 150000
+
+    def __init__(self, project_path: str, max_tokens: int = None):
+        self.project_path = project_path
+        self.max_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
+        self._tokenizer = None
+
+    def _get_tokenizer(self):
+        """Get or create the Anthropic tokenizer."""
+        if self._tokenizer is None:
+            try:
+                self._tokenizer = anthropic.Tokenizer()
+            except Exception as e:
+                logger.warning(f"Failed to create Anthropic tokenizer: {e}. Using estimate.")
+                self._tokenizer = None
+        return self._tokenizer
+
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text using Anthropic's tokenizer with fallback."""
+        tokenizer = self._get_tokenizer()
+        if tokenizer:
+            try:
+                return tokenizer.count_tokens(text)
+            except Exception:
+                pass
+        # Fallback: estimate ~4 chars per token (conservative for English)
+        return len(text) // 4
+
+    def _read_file(self, rel_path: str) -> Optional[Tuple[str, float]]:
+        """Read file content and return (content, modification_time)."""
+        full_path = os.path.join(self.project_path, rel_path)
+        try:
+            if not os.path.exists(full_path) or os.path.isdir(full_path):
+                return None
+
+            with open(full_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            mtime = os.path.getmtime(full_path)
+            return content, mtime
+        except Exception as e:
+            logger.debug(f"Failed to read {rel_path}: {e}")
+            return None
+
+    def _truncate_file_tail_preserved(self, content: str, max_tokens: int) -> str:
+        """
+        Truncate file content but preserve the last 20%.
+        The end of files is usually more relevant for continuity.
+        """
+        current_tokens = self.count_tokens(content)
+        if current_tokens <= max_tokens:
+            return content
+
+        # Calculate how much to keep
+        total_chars = len(content)
+        # Keep last 20% always
+        tail_start = int(total_chars * 0.8)
+        tail_content = content[tail_start:]
+        tail_tokens = self.count_tokens(tail_content)
+
+        # Remaining budget for head
+        head_tokens = max_tokens - tail_tokens - 50  # Reserve 50 tokens for markers
+
+        if head_tokens <= 0:
+            # Tail alone exceeds budget, just truncate tail
+            return content[-int(total_chars * 0.3):] + "\n\n[... content truncated, showing last 30% ...]"
+
+        # Binary search for head cutoff
+        head_chars = int(head_tokens * 4)  # Estimate
+        head_content = content[:head_chars]
+
+        # Adjust if needed
+        while self.count_tokens(head_content) > head_tokens and head_chars > 100:
+            head_chars = int(head_chars * 0.9)
+            head_content = content[:head_chars]
+
+        return f"{head_content}\n\n[... middle content truncated ...]\n\n{tail_content}"
+
+    def _list_md_files(self, directory: str) -> List[Tuple[str, float]]:
+        """List all .md files in directory with their modification times."""
+        full_dir = os.path.join(self.project_path, directory)
+        files = []
+
+        if not os.path.exists(full_dir):
+            return files
+
+        try:
+            for item in os.listdir(full_dir):
+                if item.startswith('.') or item.startswith('_'):
+                    continue
+
+                full_path = os.path.join(full_dir, item)
+                if os.path.isfile(full_path) and item.endswith('.md'):
+                    rel_path = os.path.join(directory, item)
+                    mtime = os.path.getmtime(full_path)
+                    files.append((rel_path, mtime))
+        except Exception as e:
+            logger.warning(f"Failed to list directory {directory}: {e}")
+
+        return files
+
+    def _get_most_recent_chapter(self) -> Optional[str]:
+        """Get the most recently modified .md file in manuscript/chapters."""
+        chapter_files = self._list_md_files('manuscript/chapters')
+        if not chapter_files:
+            return None
+
+        # Sort by modification time, most recent first
+        chapter_files.sort(key=lambda x: x[1], reverse=True)
+        return chapter_files[0][0]
+
+    def load_with_budget(self) -> str:
+        """
+        Load project files using Smart Bucket prioritization with token budget.
+
+        Returns formatted context string for inclusion in prompts.
+        """
+        entries: List[FileEntry] = []
+
+        # ===== BUCKET A: Critical files (always include) =====
+        critical_files = [
+            'planning/story-outline.md',
+        ]
+
+        # Add most recently modified chapter
+        recent_chapter = self._get_most_recent_chapter()
+        if recent_chapter:
+            critical_files.append(recent_chapter)
+
+        for rel_path in critical_files:
+            result = self._read_file(rel_path)
+            if result:
+                content, mtime = result
+                tokens = self.count_tokens(content)
+                entries.append(FileEntry(rel_path, content, tokens, mtime, 'critical'))
+
+        # ===== BUCKET B: Context files (story-bible, characters, planning) =====
+        context_dirs = [
+            ('story-bible', ['continuity.md', 'timeline.md', 'world-notes.md']),
+            ('planning', ['chapter-breakdown.md', 'themes.md']),
+            ('characters', None),  # All files in characters
+        ]
+
+        for directory, priority_files in context_dirs:
+            if priority_files:
+                # Load specific files first
+                for filename in priority_files:
+                    rel_path = os.path.join(directory, filename)
+                    if rel_path not in [e.rel_path for e in entries]:
+                        result = self._read_file(rel_path)
+                        if result:
+                            content, mtime = result
+                            tokens = self.count_tokens(content)
+                            entries.append(FileEntry(rel_path, content, tokens, mtime, 'context'))
+
+            # Load other files from directory
+            all_files = self._list_md_files(directory)
+            for rel_path, mtime in all_files:
+                if rel_path not in [e.rel_path for e in entries]:
+                    result = self._read_file(rel_path)
+                    if result:
+                        content, _ = result
+                        tokens = self.count_tokens(content)
+                        entries.append(FileEntry(rel_path, content, tokens, mtime, 'context'))
+
+        # ===== BUCKET C: Reference files (other chapters) =====
+        chapter_files = self._list_md_files('manuscript/chapters')
+        for rel_path, mtime in chapter_files:
+            if rel_path not in [e.rel_path for e in entries]:
+                result = self._read_file(rel_path)
+                if result:
+                    content, _ = result
+                    tokens = self.count_tokens(content)
+                    entries.append(FileEntry(rel_path, content, tokens, mtime, 'reference'))
+
+        # Also add scenes as reference
+        scene_files = self._list_md_files('manuscript/scenes')
+        for rel_path, mtime in scene_files:
+            result = self._read_file(rel_path)
+            if result:
+                content, _ = result
+                tokens = self.count_tokens(content)
+                entries.append(FileEntry(rel_path, content, tokens, mtime, 'reference'))
+
+        # ===== Apply budget and build output =====
+        return self._apply_budget_and_format(entries)
+
+    def _apply_budget_and_format(self, entries: List[FileEntry]) -> str:
+        """Apply token budget to entries and format output."""
+        # Sort entries by bucket priority and modification time
+        bucket_priority = {'critical': 0, 'context': 1, 'reference': 2}
+        entries.sort(key=lambda e: (bucket_priority[e.bucket], -e.mtime))
+
+        selected_entries: List[FileEntry] = []
+        total_tokens = 0
+        context_budget = int(self.max_tokens * 0.8)  # 80% for context bucket
+
+        for entry in entries:
+            # Always include critical bucket
+            if entry.bucket == 'critical':
+                # Truncate if necessary
+                if entry.tokens > self.max_tokens // 3:
+                    entry.content = self._truncate_file_tail_preserved(
+                        entry.content,
+                        self.max_tokens // 3
+                    )
+                    entry.tokens = self.count_tokens(entry.content)
+
+                selected_entries.append(entry)
+                total_tokens += entry.tokens
+
+            # Context bucket fills up to 80% of budget
+            elif entry.bucket == 'context':
+                if total_tokens + entry.tokens <= context_budget:
+                    selected_entries.append(entry)
+                    total_tokens += entry.tokens
+                elif total_tokens < context_budget:
+                    # Truncate to fit
+                    available = context_budget - total_tokens
+                    if available > 500:  # Only include if meaningful
+                        entry.content = self._truncate_file_tail_preserved(entry.content, available)
+                        entry.tokens = self.count_tokens(entry.content)
+                        selected_entries.append(entry)
+                        total_tokens += entry.tokens
+
+            # Reference bucket uses remaining space
+            elif entry.bucket == 'reference':
+                if total_tokens + entry.tokens <= self.max_tokens:
+                    selected_entries.append(entry)
+                    total_tokens += entry.tokens
+                elif total_tokens < self.max_tokens:
+                    # Truncate to fit
+                    available = self.max_tokens - total_tokens
+                    if available > 500:
+                        entry.content = self._truncate_file_tail_preserved(entry.content, available)
+                        entry.tokens = self.count_tokens(entry.content)
+                        selected_entries.append(entry)
+                        total_tokens += entry.tokens
+
+        # Format output
+        if not selected_entries:
+            return ""
+
+        sections = []
+        for entry in selected_entries:
+            sections.append(f"### File: {entry.rel_path}\n```\n{entry.content}\n```\n")
+
+        header = f"""## PROJECT FILES ({len(selected_entries)} files, ~{total_tokens:,} tokens)
+
+Loaded with Smart Bucket Priority:
+- Critical: planning/story-outline.md + most recent chapter
+- Context: story-bible, characters, planning
+- Reference: other chapters and scenes
+
+"""
+        return header + "\n".join(sections)
+
+
+def get_project_file_contents(project_path: str, max_tokens: int = 150000) -> str:
+    """
+    Read and return contents of key project files for agent context.
+
+    Uses token-based budgeting with Smart Bucket priority:
+    - Bucket A (Critical): Always include planning/story-outline.md and most recent chapter
+    - Bucket B (Context): Fill to 80% with story-bible, characters, planning
+    - Bucket C (Reference): Fill remainder with other chapters
+
+    Large files are truncated but preserve the last 20% for continuity.
+    """
+    loader = TokenBudgetLoader(project_path, max_tokens)
+    return loader.load_with_budget()
 
 
 class ChatRequest(BaseModel):
@@ -72,88 +369,6 @@ def build_file_tree_for_agent(path: str, prefix: str = "") -> str:
     return "\n".join(result)
 
 
-def get_project_file_contents(project_path: str, max_file_size: int = 10000) -> str:
-    """Read and return contents of key project files for agent context"""
-    # Priority files to include (in order of importance)
-    priority_files = [
-        "planning/story-outline.md",
-        "planning/chapter-breakdown.md",
-        "planning/themes.md",
-        "story-bible/continuity.md",
-        "story-bible/timeline.md",
-        "story-bible/world-notes.md",
-    ]
-
-    # Directories to scan for additional files
-    scan_dirs = [
-        ("characters", "Character Files"),
-        ("manuscript/chapters", "Chapter Files"),
-        ("manuscript/scenes", "Scene Files"),
-        ("feedback", "Feedback Files"),
-        ("research", "Research Files"),
-    ]
-
-    file_contents = []
-    total_size = 0
-    max_total_size = 50000  # Limit total content to avoid context overflow
-
-    # Read priority files first
-    for rel_path in priority_files:
-        full_path = os.path.join(project_path, rel_path)
-        if os.path.exists(full_path) and os.path.isfile(full_path):
-            try:
-                with open(full_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                if len(content) > max_file_size:
-                    content = content[:max_file_size] + "\n\n[... content truncated ...]"
-
-                if total_size + len(content) > max_total_size:
-                    break
-
-                file_contents.append(f"### File: {rel_path}\n```\n{content}\n```\n")
-                total_size += len(content)
-            except Exception as e:
-                logger.warning(f"Failed to read {rel_path}: {e}")
-
-    # Scan directories for additional files
-    for dir_rel_path, section_name in scan_dirs:
-        dir_full_path = os.path.join(project_path, dir_rel_path)
-        if not os.path.exists(dir_full_path) or not os.path.isdir(dir_full_path):
-            continue
-
-        try:
-            for file_name in sorted(os.listdir(dir_full_path)):
-                if file_name.startswith('.') or file_name.startswith('_'):
-                    continue
-
-                file_path = os.path.join(dir_full_path, file_name)
-                if not os.path.isfile(file_path):
-                    continue
-
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-
-                    if len(content) > max_file_size:
-                        content = content[:max_file_size] + "\n\n[... content truncated ...]"
-
-                    if total_size + len(content) > max_total_size:
-                        file_contents.append(f"\n[... additional files not loaded due to size limits ...]")
-                        return "\n".join(file_contents)
-
-                    rel_file_path = os.path.join(dir_rel_path, file_name)
-                    file_contents.append(f"### File: {rel_file_path}\n```\n{content}\n```\n")
-                    total_size += len(content)
-                except UnicodeDecodeError:
-                    # Skip binary files that can't be decoded as UTF-8
-                    logger.debug(f"Skipping binary file: {file_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to read {file_name}: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to scan directory {dir_rel_path}: {e}")
-
-    return "\n".join(file_contents)
 
 
 async def stream_orchestrated_response(
