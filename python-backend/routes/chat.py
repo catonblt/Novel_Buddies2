@@ -9,8 +9,14 @@ import os
 import json
 from typing import AsyncGenerator
 
-from models.database import Project, Message, get_db
+from models.database import Project, Message, AgentAnalysis, ContentVersion, get_db
 from agents.prompts import AGENT_SYSTEM_PROMPTS
+from agents.pipeline import (
+    pipeline,
+    detect_content_type,
+    should_enhance_with_literary_agents,
+    format_analysis_for_display
+)
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
 
@@ -156,6 +162,75 @@ You can read and write files in the project directory. When you create or update
 
             # Send file operations to frontend
             yield f"data: {json.dumps({'type': 'file_operations', 'operations': formatted_ops, 'require_confirmation': require_confirmation})}\n\n"
+
+        # Check if literary agents should process this content
+        enable_literary = getattr(project, 'enable_literary_agents', True)
+        content_type = detect_content_type(user_message, {})
+
+        if enable_literary and should_enhance_with_literary_agents(content_type, assistant_response):
+            try:
+                logger.info(f"Running literary agents pipeline for content type: {content_type}")
+
+                # Build project context for agents
+                project_context = {
+                    "title": project.title,
+                    "author": project.author,
+                    "genre": project.genre,
+                    "premise": project.premise,
+                    "themes": project.themes,
+                    "setting": project.setting
+                }
+
+                # Notify that literary analysis is starting
+                yield f"data: {json.dumps({'type': 'literary_analysis_start', 'content_type': content_type})}\n\n"
+
+                # Run the pipeline
+                analysis_result = await pipeline.process_story_content(
+                    content=assistant_response,
+                    content_type=content_type,
+                    project_context=project_context,
+                    api_key=api_key,
+                    parallel=True
+                )
+
+                # Store analyses in database
+                analysis_id = str(uuid.uuid4())
+                for agent_type_name, analysis in analysis_result.get("agent_analyses", {}).items():
+                    agent_analysis = AgentAnalysis(
+                        id=str(uuid.uuid4()),
+                        project_id=project.id,
+                        content_id=analysis_id,
+                        content_type=content_type,
+                        agent_type=agent_type_name,
+                        analysis_result=json.dumps(analysis),
+                        timestamp=int(time.time())
+                    )
+                    db.add(agent_analysis)
+
+                # Store content version
+                content_version = ContentVersion(
+                    id=str(uuid.uuid4()),
+                    project_id=project.id,
+                    content_type=content_type,
+                    original_content=assistant_response,
+                    agent_analyses_id=analysis_id,
+                    timestamp=int(time.time())
+                )
+                db.add(content_version)
+                db.commit()
+
+                logger.log_database_operation("insert", "agent_analyses", True)
+                logger.info(f"Literary analysis complete in {analysis_result.get('processing_time_seconds', 0)}s")
+
+                # Format and send the analysis
+                formatted_analysis = format_analysis_for_display(analysis_result)
+
+                yield f"data: {json.dumps({'type': 'literary_analysis', 'analysis': formatted_analysis, 'raw_result': analysis_result})}\n\n"
+
+            except Exception as e:
+                logger.log_exception(e, {"project_id": project.id}, "literary_agents_pipeline")
+                # Don't fail the entire request if literary analysis fails
+                yield f"data: {json.dumps({'type': 'literary_analysis_error', 'error': str(e)})}\n\n"
 
         # Send completion signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
