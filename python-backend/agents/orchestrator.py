@@ -12,7 +12,7 @@ import anthropic
 from typing import Dict, List, Any, Optional, AsyncGenerator, Tuple
 
 from agents.literary_agents import LITERARY_AGENT_PROMPTS, AGENT_PERSONALITIES
-from agents.prompts import FILE_OPERATION_INSTRUCTIONS
+from agents.prompts import FILE_OPERATION_INSTRUCTIONS, MEMORY_TOOL_INSTRUCTIONS
 
 
 # Agent role definitions
@@ -489,8 +489,9 @@ class StoryOrchestrator:
         else:
             system_prompt = LITERARY_AGENT_PROMPTS.get(agent_type, "")
 
-        # Add file operation instructions
+        # Add file operation instructions and memory tool
         system_prompt += FILE_OPERATION_INSTRUCTIONS
+        system_prompt += MEMORY_TOOL_INSTRUCTIONS
 
         # Add project context
         system_prompt += f"""
@@ -562,7 +563,7 @@ PROJECT CONTEXT:
         """
         Generate the final synthesized response through Story Advocate.
         """
-        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS
+        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + MEMORY_TOOL_INSTRUCTIONS
 
         # Add project context
         system_prompt += f"""

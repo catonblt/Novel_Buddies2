@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import os
@@ -10,8 +10,31 @@ from difflib import SequenceMatcher
 
 from models.database import get_db, Project
 from utils.logger import logger
+from services.memory_service import get_memory_service
 
 router = APIRouter()
+
+
+def _index_file_to_memory_background(project_id: str, file_path: str, rel_path: str, project_path: str):
+    """
+    Background task to index a file into project memory after file operations.
+
+    This is wrapped in try/except to ensure file operations never fail due to memory indexing errors.
+    """
+    try:
+        memory_service = get_memory_service()
+        if not memory_service.is_available():
+            return
+
+        # Read the file content
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        memory_service.index_file(project_id, rel_path, content)
+        logger.debug(f"Indexed file {rel_path} to memory for project {project_id}")
+    except Exception as e:
+        # Log error but don't propagate - file operation must succeed even if indexing fails
+        logger.error(f"Memory indexing failed for {file_path}: {str(e)}")
 
 
 def normalize_whitespace(text: str) -> str:
@@ -305,6 +328,7 @@ def commit_changes(project_path: str, message: str, agent_type: str):
 @router.post("/execute", response_model=FileOperationResult)
 async def execute_file_operation(
     operation: FileOperation,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """Execute a single file operation"""
@@ -487,6 +511,17 @@ async def execute_file_operation(
         else:
             raise HTTPException(status_code=400, detail=f"Invalid operation type: {operation.type}")
 
+        # Index file to memory in background for operations that modify content
+        # (create, update, append, insert, patch - but not delete)
+        if operation.type != "delete":
+            background_tasks.add_task(
+                _index_file_to_memory_background,
+                operation.project_id,
+                full_path,
+                operation.path,
+                project.path
+            )
+
         return FileOperationResult(
             success=True,
             path=operation.path,
@@ -509,6 +544,7 @@ async def execute_file_operation(
 @router.post("/batch")
 async def execute_batch_operations(
     batch: BatchFileOperations,
+    background_tasks: BackgroundTasks,
     auto_commit: bool = True,
     db: Session = Depends(get_db)
 ):
@@ -525,7 +561,7 @@ async def execute_batch_operations(
 
     for op in batch.operations:
         try:
-            result = await execute_file_operation(op, db)
+            result = await execute_file_operation(op, background_tasks, db)
             results.append(result.dict())
             if result.success:
                 successful_ops.append(op)

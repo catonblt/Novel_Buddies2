@@ -20,10 +20,12 @@ from agents.orchestrator import (
     GENERATOR_PROMPTS,
     REVIEWER_PROMPTS
 )
-from agents.prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS
+from agents.prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS, MEMORY_TOOL_INSTRUCTIONS
 from agents.context_loader import build_project_context
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
+from services.memory_service import get_memory_service
+import re
 
 router = APIRouter()
 
@@ -323,6 +325,68 @@ def get_project_file_contents(project_path: str, max_tokens: int = 150000) -> st
     return loader.load_with_budget()
 
 
+def parse_memory_searches(text: str) -> List[dict]:
+    """Extract memory search requests from agent response text."""
+    searches = []
+    pattern = r'<memory_search>(.*?)</memory_search>'
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    for match in matches:
+        search = {}
+        query_match = re.search(r'<query>(.*?)</query>', match, re.DOTALL)
+        reason_match = re.search(r'<reason>(.*?)</reason>', match, re.DOTALL)
+
+        if query_match:
+            search['query'] = query_match.group(1).strip()
+            search['reason'] = reason_match.group(1).strip() if reason_match else ''
+            searches.append(search)
+
+    return searches
+
+
+def execute_memory_searches(project_id: str, searches: List[dict]) -> str:
+    """
+    Execute memory searches and return formatted results.
+
+    Args:
+        project_id: The project identifier
+        searches: List of search dictionaries with 'query' and 'reason' keys
+
+    Returns:
+        Formatted string with all search results
+    """
+    if not searches:
+        return ""
+
+    memory_service = get_memory_service()
+    if not memory_service.is_available():
+        return "\n[Memory search unavailable - ChromaDB not initialized]\n"
+
+    results = []
+    for search in searches:
+        query = search.get('query', '')
+        reason = search.get('reason', '')
+
+        if not query:
+            continue
+
+        try:
+            search_results = memory_service.query_project(project_id, query, n_results=5)
+            results.append(f"**Memory Search: {query}**")
+            if reason:
+                results.append(f"*Reason: {reason}*")
+            results.append(search_results)
+            results.append("---")
+        except Exception as e:
+            logger.error(f"Memory search failed for query '{query}': {str(e)}")
+            results.append(f"**Memory Search: {query}** - Error: {str(e)}")
+            results.append("---")
+
+    if results:
+        return "\n\n**MEMORY SEARCH RESULTS:**\n\n" + "\n".join(results)
+    return ""
+
+
 class ChatRequest(BaseModel):
     project_id: str
     message: str
@@ -471,7 +535,7 @@ To update an existing file, read its current content from the EXISTING PROJECT F
         yield f"data: {json.dumps({'type': 'status', 'message': 'Story Advocate interpreting your request...', 'agent': 'story_advocate'})}\n\n"
 
         # Build the full system prompt for Story Advocate
-        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + LONG_CONTENT_INSTRUCTIONS + project_context
+        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + LONG_CONTENT_INSTRUCTIONS + MEMORY_TOOL_INSTRUCTIONS + project_context
 
         # Add routing context based on request classification
         if primary_agents:

@@ -258,6 +258,100 @@ ALWAYS:
 - Provide clear continuation points
 """
 
+# Memory search tool instructions for RAG-based continuity
+MEMORY_TOOL_INSTRUCTIONS = """
+
+MEMORY SEARCH CAPABILITY:
+
+You have access to a semantic search tool that can find relevant information from the entire project history. This allows you to recall specific details without needing every file loaded into your context.
+
+HOW TO USE MEMORY SEARCH:
+
+When you need to find specific information that isn't in your current context (character details, plot points, world-building facts, previous scenes), use the memory search tag:
+
+<memory_search>
+  <query>Your search query here</query>
+  <reason>Brief explanation of what you're looking for</reason>
+</memory_search>
+
+EXAMPLES:
+
+1. Finding character details:
+<memory_search>
+  <query>Elena's eye color and physical description</query>
+  <reason>Need to maintain consistency with established character appearance</reason>
+</memory_search>
+
+2. Checking plot continuity:
+<memory_search>
+  <query>events at the abandoned warehouse confrontation</query>
+  <reason>Referencing what happened in previous chapter for continuity</reason>
+</memory_search>
+
+3. Recalling world-building details:
+<memory_search>
+  <query>magic system rules and limitations</query>
+  <reason>Ensuring magic usage follows established rules</reason>
+</memory_search>
+
+4. Finding specific quotes or dialogue:
+<memory_search>
+  <query>Marcus's speech about power and sacrifice</query>
+  <reason>Referencing earlier dialogue for thematic callback</reason>
+</memory_search>
+
+WHEN TO USE MEMORY SEARCH:
+
+- Before writing scenes involving characters you haven't seen recently
+- When referencing events from earlier in the story
+- To check if something has already been established
+- When ensuring consistency with world-building rules
+- To find specific details mentioned in passing
+
+IMPORTANT NOTES:
+
+- Memory search returns the most relevant text chunks from indexed files
+- Results include the source file path for reference
+- Use specific, descriptive queries for best results
+- The search understands semantic meaning, not just exact keyword matches
+- If no relevant results are found, proceed with reasonable assumptions and note them
+
+This tool helps you maintain continuity across the entire novel without needing every chapter loaded into context.
+"""
+
+# JSON Tool Definition for Claude's tool use format
+# This can be used when implementing the tool as a proper Claude tool
+MEMORY_SEARCH_TOOL_DEFINITION = {
+    "name": "query_project_memory",
+    "description": """Search the project's semantic memory for specific details from any chapter, character profile, or story element.
+
+Use this tool to find:
+- Character details (appearance, personality, relationships, backstory)
+- Plot points and events from previous chapters
+- World-building facts (locations, rules, history)
+- Specific dialogue or scenes
+- Any established story facts you need to reference
+
+The search uses semantic similarity, so describe what you're looking for in natural language rather than exact keywords.
+
+Returns relevant text chunks with their source file locations.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural language description of what you're searching for. Be specific and descriptive for best results."
+            },
+            "n_results": {
+                "type": "integer",
+                "description": "Number of results to return (default: 5, max: 10)",
+                "default": 5
+            }
+        },
+        "required": ["query"]
+    }
+}
+
 # Legacy agent prompts removed - now using orchestrator.py with Story Advocate system
 # The old 5-agent system (story-architect, character-specialist, prose-writer,
 # research-continuity, editorial-reviewer) has been replaced with the 9-agent
