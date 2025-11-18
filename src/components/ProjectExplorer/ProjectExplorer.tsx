@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { FileNode } from '@/lib/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
-import { Search, FileText, FolderOpen, Folder, RefreshCw } from 'lucide-react';
+import { Search, FileText, FolderOpen, Folder, RefreshCw, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import FilePreview from './FilePreview';
 
@@ -73,7 +73,12 @@ export default function ProjectExplorer() {
     loadFiles(true);
   };
 
-  const toggleFolder = (folderPath: string) => {
+  const toggleFolder = (folderPath: string, event?: React.MouseEvent) => {
+    // Prevent event bubbling that might cause issues
+    if (event) {
+      event.stopPropagation();
+    }
+
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(folderPath)) {
@@ -85,9 +90,47 @@ export default function ProjectExplorer() {
     });
   };
 
-  const handleFileClick = async (file: FileNode) => {
+  // Filter file tree based on search query (pure function, no side effects)
+  const filterTreePure = (nodes: FileNode[], query: string, matchingFolders: Set<string>): FileNode[] => {
+    if (!query.trim()) {
+      return nodes;
+    }
+
+    const lowerQuery = query.toLowerCase();
+    const result: FileNode[] = [];
+
+    for (const node of nodes) {
+      const nameMatches = node.name.toLowerCase().includes(lowerQuery);
+
+      if (node.isDirectory && node.children) {
+        // Recursively filter children
+        const filteredChildren = filterTreePure(node.children, query, matchingFolders);
+
+        if (filteredChildren.length > 0 || nameMatches) {
+          // Include directory if it has matching children or matches itself
+          result.push({
+            ...node,
+            children: filteredChildren.length > 0 ? filteredChildren : node.children
+          });
+
+          // Track folders that have matching children
+          if (filteredChildren.length > 0) {
+            matchingFolders.add(node.path);
+          }
+        }
+      } else if (nameMatches) {
+        // Include file if name matches
+        result.push(node);
+      }
+    }
+
+    return result;
+  };
+
+  const handleFileClick = (file: FileNode, event: React.MouseEvent) => {
+    event.stopPropagation();
     if (file.isDirectory) {
-      toggleFolder(file.path);
+      toggleFolder(file.path, event);
     } else {
       setSelectedFile(file);
     }
@@ -105,7 +148,7 @@ export default function ProjectExplorer() {
               isSelected ? 'bg-accent' : ''
             }`}
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
-            onClick={() => handleFileClick(node)}
+            onClick={(e) => handleFileClick(node, e)}
           >
             {node.isDirectory ? (
               isExpanded ? (
@@ -145,6 +188,25 @@ export default function ProjectExplorer() {
 
   const tree = buildTree(files);
 
+  // Memoize filtered tree and collect folders to expand
+  const { filteredTree, foldersToExpand } = useMemo(() => {
+    const matchingFolders = new Set<string>();
+    const filtered = filterTreePure(tree, searchQuery, matchingFolders);
+    return { filteredTree: filtered, foldersToExpand: matchingFolders };
+  }, [tree, searchQuery]);
+
+  // Auto-expand folders when search matches children
+  useEffect(() => {
+    if (searchQuery && foldersToExpand.size > 0) {
+      setExpandedFolders(prev => new Set([...prev, ...foldersToExpand]));
+    }
+  }, [searchQuery, foldersToExpand]);
+
+  // Clear search handler
+  const clearSearch = () => {
+    setSearchQuery('');
+  };
+
   return (
     <div className="flex h-full flex-col">
       {/* Search */}
@@ -156,8 +218,16 @@ export default function ProjectExplorer() {
               placeholder="Search files..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
+              className="pl-9 pr-9"
             />
+            {searchQuery && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <Button
             variant="outline"
@@ -174,7 +244,19 @@ export default function ProjectExplorer() {
       <div className="flex-1 overflow-hidden">
         <div className="flex h-full flex-col">
           <ScrollArea className="h-1/2 border-b border-border">
-            <div className="p-2">{renderFileTree(tree)}</div>
+            <div className="p-2">
+              {filteredTree.length > 0 ? (
+                renderFileTree(filteredTree)
+              ) : searchQuery ? (
+                <div className="text-center py-4 text-sm text-muted-foreground">
+                  No files match "{searchQuery}"
+                </div>
+              ) : (
+                <div className="text-center py-4 text-sm text-muted-foreground">
+                  No files found
+                </div>
+              )}
+            </div>
           </ScrollArea>
 
           {/* File Preview */}
