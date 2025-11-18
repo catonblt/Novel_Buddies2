@@ -4,7 +4,8 @@ import { Project } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Loader2, Plus, FolderOpen, BookOpen, Calendar, User, Upload } from 'lucide-react';
+import { Loader2, Plus, FolderOpen, BookOpen, Calendar, User, Upload, Search } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/tauri';
 
 interface WelcomeScreenProps {
   onSelectProject: (project: Project) => void;
@@ -56,6 +57,20 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
       setError(errorMessage.includes('detail') ? JSON.parse(errorMessage.split('detail')[1]).detail : errorMessage);
     } finally {
       setIsLoadingProject(false);
+    }
+  };
+
+  const handleBrowseForProject = async () => {
+    try {
+      setError(null);
+      // Use Tauri dialog to select directory
+      const selected = await invoke<string>('select_directory');
+      if (selected) {
+        setLoadPath(selected);
+      }
+    } catch (error) {
+      console.error('Failed to open folder dialog:', error);
+      setError('Could not open folder browser. Please enter the path manually.');
     }
   };
 
@@ -127,6 +142,13 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
                     className="flex-1"
                   />
                   <Button
+                    variant="outline"
+                    onClick={handleBrowseForProject}
+                    title="Browse for folder"
+                  >
+                    <Search className="h-4 w-4" />
+                  </Button>
+                  <Button
                     onClick={handleLoadProject}
                     disabled={isLoadingProject || !loadPath.trim()}
                   >
@@ -148,7 +170,7 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Enter the full path to an existing Novel Writer project folder
+                  Enter the path or click the search icon to browse for a project folder
                 </p>
               </div>
             ) : (
