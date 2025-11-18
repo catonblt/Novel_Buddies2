@@ -12,6 +12,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -23,11 +25,13 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [model, setModel] = useState(settings.model);
   const [autonomyLevel, setAutonomyLevel] = useState(settings.autonomyLevel);
+  const [autoCommit, setAutoCommit] = useState(settings.autoCommit);
 
   useEffect(() => {
     setApiKey(settings.apiKey);
     setModel(settings.model);
     setAutonomyLevel(settings.autonomyLevel);
+    setAutoCommit(settings.autoCommit);
   }, [settings]);
 
   const handleSave = () => {
@@ -35,6 +39,7 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
       apiKey,
       model,
       autonomyLevel,
+      autoCommit,
     });
     onOpenChange(false);
   };
@@ -72,28 +77,48 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Agent Autonomy Level</Label>
-              <span className="text-sm text-muted-foreground">
-                {autonomyLevel < 33 ? 'Low' : autonomyLevel < 66 ? 'Medium' : 'High'}
-              </span>
+          <Separator />
+
+          <div className="space-y-4">
+            <h4 className="text-sm font-medium">File Operations</h4>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Agent Autonomy Level</Label>
+                <span className="text-sm text-muted-foreground">
+                  {autonomyLevel < 50 ? 'Confirm' : 'Auto'}
+                </span>
+              </div>
+              <Slider
+                value={[autonomyLevel]}
+                onValueChange={(value) => setAutonomyLevel(value[0])}
+                max={100}
+                step={1}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                {autonomyLevel < 50
+                  ? 'Agents will ask for confirmation before creating, updating, or deleting files'
+                  : 'Agents will automatically execute file operations without confirmation'}
+              </p>
             </div>
-            <Slider
-              value={[autonomyLevel]}
-              onValueChange={(value) => setAutonomyLevel(value[0])}
-              max={100}
-              step={1}
-              className="w-full"
-            />
-            <p className="text-xs text-muted-foreground">
-              {autonomyLevel < 33
-                ? 'Agents always ask before making changes'
-                : autonomyLevel < 66
-                ? 'Agents make minor changes automatically'
-                : 'Agents work autonomously (you can undo via version history)'}
-            </p>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="autoCommit">Auto-commit Changes</Label>
+                <p className="text-xs text-muted-foreground">
+                  Automatically commit file changes to Git
+                </p>
+              </div>
+              <Switch
+                id="autoCommit"
+                checked={autoCommit}
+                onCheckedChange={setAutoCommit}
+              />
+            </div>
           </div>
+
+          <Separator />
 
           <Button onClick={handleSave} className="w-full">
             Save Settings
