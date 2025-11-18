@@ -18,7 +18,8 @@ from agents.orchestrator import (
     GENERATOR_PROMPTS,
     REVIEWER_PROMPTS
 )
-from agents.prompts import FILE_OPERATION_INSTRUCTIONS
+from agents.prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS
+from agents.context_loader import build_project_context
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
 
@@ -230,6 +231,24 @@ You can create, update, and delete files in the project directory. When you crea
 To update an existing file, read its current content from the EXISTING PROJECT FILES section above, then provide the complete updated content in your file_operation.
 """
 
+        # Load existing project files as context
+        # Determine agent type for smart context loading
+        _, primary_agents_for_context = classify_request(user_message)
+        agent_type_for_context = primary_agents_for_context[0] if primary_agents_for_context else "general"
+
+        try:
+            file_context = build_project_context(
+                project.path,
+                agent_type=agent_type_for_context,
+                user_message=user_message,
+                include_file_index=True
+            )
+            if file_context:
+                project_context += f"\n{file_context}"
+                logger.info(f"Loaded project file context for agent type: {agent_type_for_context}")
+        except Exception as e:
+            logger.warning(f"Failed to load project file context: {str(e)}")
+
         # Classify the request to determine which agents to use
         content_type, primary_agents = classify_request(user_message)
 
@@ -237,7 +256,7 @@ To update an existing file, read its current content from the EXISTING PROJECT F
         yield f"data: {json.dumps({'type': 'status', 'message': 'Story Advocate interpreting your request...', 'agent': 'story_advocate'})}\n\n"
 
         # Build the full system prompt for Story Advocate
-        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + project_context
+        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + LONG_CONTENT_INSTRUCTIONS + project_context
 
         # Add routing context based on request classification
         if primary_agents:

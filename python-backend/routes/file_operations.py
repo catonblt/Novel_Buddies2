@@ -29,6 +29,7 @@ class FileOperationResult(BaseModel):
     path: str
     message: str
     operation: str
+    content: Optional[str] = None  # For read operations
 
 
 class BatchFileOperations(BaseModel):

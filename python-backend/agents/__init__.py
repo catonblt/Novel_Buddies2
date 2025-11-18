@@ -1,4 +1,4 @@
-from .prompts import FILE_OPERATION_INSTRUCTIONS
+from .prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS
 from .literary_agents import (
     LITERARY_AGENT_PROMPTS,
     AGENT_PERSONALITIES,
@@ -24,9 +24,14 @@ from .orchestrator import (
     GENERATOR_AGENTS,
     REVIEWER_AGENTS
 )
+from .context_loader import (
+    ProjectContextLoader,
+    build_project_context
+)
 
 __all__ = [
     "FILE_OPERATION_INSTRUCTIONS",
+    "LONG_CONTENT_INSTRUCTIONS",
     "LITERARY_AGENT_PROMPTS",
     "AGENT_PERSONALITIES",
     "get_literary_agent_prompt",
@@ -45,5 +50,7 @@ __all__ = [
     "classify_request",
     "get_reviewers_for_content",
     "GENERATOR_AGENTS",
-    "REVIEWER_AGENTS"
+    "REVIEWER_AGENTS",
+    "ProjectContextLoader",
+    "build_project_context"
 ]
