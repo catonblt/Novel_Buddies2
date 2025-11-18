@@ -1,5 +1,5 @@
 import { Message } from '@/lib/types';
-import { AGENT_INFO, STORY_ADVOCATE } from '@/lib/agents';
+import { AGENT_INFO } from '@/lib/agents';
 import { formatDate } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
