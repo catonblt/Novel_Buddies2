@@ -84,6 +84,24 @@ export const api = {
     return apiCall<Project>('PATCH', `/projects/${id}`, undefined, data);
   },
 
+  async loadProject(path: string): Promise<Project> {
+    logger.userAction('load_project', { path });
+    return apiCall<Project>('POST', '/projects/load', undefined, { path });
+  },
+
+  async saveProjectState(projectId: string, apiKey: string, messages: Message[]): Promise<void> {
+    logger.userAction('save_project_state', { projectId });
+    await apiCall<void>('POST', `/projects/${projectId}/save`, undefined, {
+      project_id: projectId,
+      api_key: apiKey,
+      messages,
+    });
+  },
+
+  async getProjectState(projectId: string): Promise<{ api_key: string; messages: Message[] }> {
+    return apiCall<{ api_key: string; messages: Message[] }>('GET', `/projects/${projectId}/state`);
+  },
+
   // Agent chat - now routes through Story Advocate
   async sendMessage(
     projectId: string,

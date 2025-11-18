@@ -3,7 +3,8 @@ import { api } from '@/lib/api';
 import { Project } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Plus, FolderOpen, BookOpen, Calendar, User } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Loader2, Plus, FolderOpen, BookOpen, Calendar, User, Upload } from 'lucide-react';
 
 interface WelcomeScreenProps {
   onSelectProject: (project: Project) => void;
@@ -14,6 +15,9 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showLoadInput, setShowLoadInput] = useState(false);
+  const [loadPath, setLoadPath] = useState('');
+  const [isLoadingProject, setIsLoadingProject] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -30,6 +34,28 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
       setError('Failed to load projects. Please ensure the backend is running.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleLoadProject = async () => {
+    if (!loadPath.trim()) {
+      setError('Please enter a valid project path');
+      return;
+    }
+
+    try {
+      setIsLoadingProject(true);
+      setError(null);
+      const project = await api.loadProject(loadPath.trim());
+      setShowLoadInput(false);
+      setLoadPath('');
+      onSelectProject(project);
+    } catch (err: any) {
+      console.error('Failed to load project:', err);
+      const errorMessage = err?.message || 'Failed to load project';
+      setError(errorMessage.includes('detail') ? JSON.parse(errorMessage.split('detail')[1]).detail : errorMessage);
+    } finally {
+      setIsLoadingProject(false);
     }
   };
 
@@ -88,6 +114,54 @@ export default function WelcomeScreen({ onSelectProject, onCreateNew }: WelcomeS
               <Plus className="mr-2 h-5 w-5" />
               Create New Project
             </Button>
+
+            {/* Load Project Button/Input */}
+            {showLoadInput ? (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Enter project folder path..."
+                    value={loadPath}
+                    onChange={(e) => setLoadPath(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleLoadProject()}
+                    className="flex-1"
+                  />
+                  <Button
+                    onClick={handleLoadProject}
+                    disabled={isLoadingProject || !loadPath.trim()}
+                  >
+                    {isLoadingProject ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Load'
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowLoadInput(false);
+                      setLoadPath('');
+                      setError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Enter the full path to an existing Novel Writer project folder
+                </p>
+              </div>
+            ) : (
+              <Button
+                onClick={() => setShowLoadInput(true)}
+                variant="outline"
+                className="w-full h-14 text-lg"
+                size="lg"
+              >
+                <Upload className="mr-2 h-5 w-5" />
+                Load Existing Project
+              </Button>
+            )}
 
             {/* Existing Projects */}
             {projects.length > 0 && (

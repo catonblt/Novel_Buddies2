@@ -50,9 +50,14 @@ export default function ProjectExplorer() {
       const fileList = await api.listFiles(currentProject.path);
       setFiles(fileList);
 
-      // Auto-expand planning and manuscript folders on initial load
-      if (!showRefreshIndicator) {
-        setExpandedFolders(new Set(['planning', 'manuscript', 'characters']));
+      // Auto-expand planning and manuscript folders on initial load using full paths
+      if (!showRefreshIndicator && expandedFolders.size === 0) {
+        const basePath = currentProject.path;
+        setExpandedFolders(new Set([
+          `${basePath}/planning`,
+          `${basePath}/manuscript`,
+          `${basePath}/characters`
+        ]));
       }
     } catch (error) {
       console.error('Failed to load files:', error);
@@ -68,13 +73,13 @@ export default function ProjectExplorer() {
     loadFiles(true);
   };
 
-  const toggleFolder = (path: string) => {
+  const toggleFolder = (folderPath: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
       } else {
-        next.add(path);
+        next.add(folderPath);
       }
       return next;
     });
@@ -82,7 +87,7 @@ export default function ProjectExplorer() {
 
   const handleFileClick = async (file: FileNode) => {
     if (file.isDirectory) {
-      toggleFolder(file.name);
+      toggleFolder(file.path);
     } else {
       setSelectedFile(file);
     }
@@ -90,7 +95,7 @@ export default function ProjectExplorer() {
 
   const renderFileTree = (nodes: FileNode[], depth = 0) => {
     return nodes.map((node) => {
-      const isExpanded = expandedFolders.has(node.name);
+      const isExpanded = expandedFolders.has(node.path);
       const isSelected = selectedFile?.path === node.path;
 
       return (
@@ -129,24 +134,13 @@ export default function ProjectExplorer() {
     });
   };
 
-  // Build file tree with children
+  // Build file tree - backend now provides children recursively
   const buildTree = (fileList: FileNode[]): FileNode[] => {
-    const root: FileNode[] = [];
+    // Backend already provides complete tree with children
+    // Just ensure directories come first
     const dirs = fileList.filter((f) => f.isDirectory);
     const filesOnly = fileList.filter((f) => !f.isDirectory);
-
-    dirs.forEach((dir) => {
-      root.push({
-        ...dir,
-        children: [], // In a full implementation, you'd recursively load children
-      });
-    });
-
-    filesOnly.forEach((file) => {
-      root.push(file);
-    });
-
-    return root;
+    return [...dirs, ...filesOnly];
   };
 
   const tree = buildTree(files);

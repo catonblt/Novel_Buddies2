@@ -6,6 +6,7 @@ import uuid
 import time
 import os
 import shutil
+import json
 
 from models.database import Project, get_db
 from utils.logger import logger
@@ -34,6 +35,16 @@ class ProjectUpdate(BaseModel):
     themes: Optional[str] = None
     setting: Optional[str] = None
     keyCharacters: Optional[str] = None
+
+
+class ProjectLoad(BaseModel):
+    path: str
+
+
+class ProjectSave(BaseModel):
+    project_id: str
+    api_key: str
+    messages: List[dict]
 
 
 class ProjectResponse(BaseModel):
@@ -428,3 +439,197 @@ async def update_project(project_id: str, update: ProjectUpdate, db: Session = D
         duration_ms = (time.time() - start_time) * 1000
         logger.log_response("PATCH", f"/api/projects/{project_id}", 500, duration_ms, str(e))
         raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
+
+
+@router.post("/load", response_model=ProjectResponse)
+async def load_project(request: ProjectLoad, db: Session = Depends(get_db)):
+    """Load an existing project from a folder path"""
+    start_time = time.time()
+    logger.info(f"Loading project from path: {request.path}")
+    logger.log_request("POST", "/api/projects/load", body={"path": request.path})
+
+    # Validate path exists
+    if not os.path.exists(request.path):
+        raise HTTPException(status_code=404, detail=f"Path not found: {request.path}")
+
+    if not os.path.isdir(request.path):
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {request.path}")
+
+    # Check for .novel-project.json
+    project_file = os.path.join(request.path, ".novel-project.json")
+    if not os.path.exists(project_file):
+        raise HTTPException(
+            status_code=400,
+            detail="Not a valid Novel Writer project. Missing .novel-project.json file."
+        )
+
+    # Check if project already exists in database
+    existing = db.query(Project).filter(Project.path == request.path).first()
+    if existing:
+        # Return existing project
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("POST", "/api/projects/load", 200, duration_ms)
+        return ProjectResponse(
+            id=existing.id,
+            title=existing.title,
+            author=existing.author,
+            genre=existing.genre,
+            targetWordCount=existing.target_word_count,
+            createdAt=existing.created_at,
+            updatedAt=existing.updated_at,
+            path=existing.path,
+            premise=existing.premise,
+            themes=existing.themes,
+            setting=existing.setting,
+            keyCharacters=existing.key_characters
+        )
+
+    # Try to load project metadata from saved state
+    state_file = os.path.join(request.path, ".novel-state.json")
+    project_metadata = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+                project_metadata = state.get('project', {})
+        except Exception as e:
+            logger.warning(f"Failed to load project state: {e}")
+
+    # Extract folder name as default title
+    folder_name = os.path.basename(request.path)
+
+    # Create new project entry in database
+    project_id = str(uuid.uuid4())
+    db_project = Project(
+        id=project_id,
+        title=project_metadata.get('title', folder_name),
+        author=project_metadata.get('author', 'Unknown Author'),
+        genre=project_metadata.get('genre', 'Fiction'),
+        target_word_count=project_metadata.get('targetWordCount', 50000),
+        created_at=int(time.time()),
+        updated_at=int(time.time()),
+        path=request.path,
+        premise=project_metadata.get('premise', ''),
+        themes=project_metadata.get('themes', ''),
+        setting=project_metadata.get('setting', ''),
+        key_characters=project_metadata.get('keyCharacters', '')
+    )
+
+    try:
+        db.add(db_project)
+        db.commit()
+        db.refresh(db_project)
+
+        logger.log_database_operation("insert", "projects", True)
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("POST", "/api/projects/load", 200, duration_ms)
+        logger.info(f"Project loaded successfully: {project_id}")
+
+        return ProjectResponse(
+            id=db_project.id,
+            title=db_project.title,
+            author=db_project.author,
+            genre=db_project.genre,
+            targetWordCount=db_project.target_word_count,
+            createdAt=db_project.created_at,
+            updatedAt=db_project.updated_at,
+            path=db_project.path,
+            premise=db_project.premise,
+            themes=db_project.themes,
+            setting=db_project.setting,
+            keyCharacters=db_project.key_characters
+        )
+    except Exception as e:
+        db.rollback()
+        logger.log_exception(e, {"path": request.path}, "load_project")
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("POST", "/api/projects/load", 500, duration_ms, str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to load project: {str(e)}")
+
+
+@router.post("/{project_id}/save")
+async def save_project_state(project_id: str, request: ProjectSave, db: Session = Depends(get_db)):
+    """Save project state including messages and API key"""
+    start_time = time.time()
+    logger.info(f"Saving project state for: {project_id}")
+    logger.log_request("POST", f"/api/projects/{project_id}/save")
+
+    # Get project
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state_file = os.path.join(project.path, ".novel-state.json")
+
+    try:
+        # Build state object
+        state = {
+            "version": "1.0.0",
+            "savedAt": int(time.time()),
+            "project": {
+                "title": project.title,
+                "author": project.author,
+                "genre": project.genre,
+                "targetWordCount": project.target_word_count,
+                "premise": project.premise,
+                "themes": project.themes,
+                "setting": project.setting,
+                "keyCharacters": project.key_characters
+            },
+            "api_key": request.api_key,
+            "messages": request.messages
+        }
+
+        # Write state file
+        with open(state_file, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2)
+
+        logger.log_file_operation("write", state_file, True, {"size": len(json.dumps(state))})
+
+        # Update project updated_at timestamp
+        project.updated_at = int(time.time())
+        db.commit()
+
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("POST", f"/api/projects/{project_id}/save", 200, duration_ms)
+
+        return {"success": True, "message": "Project state saved successfully"}
+    except Exception as e:
+        logger.log_exception(e, {"project_id": project_id}, "save_project_state")
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("POST", f"/api/projects/{project_id}/save", 500, duration_ms, str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to save project state: {str(e)}")
+
+
+@router.get("/{project_id}/state")
+async def get_project_state(project_id: str, db: Session = Depends(get_db)):
+    """Get saved project state including messages and API key"""
+    start_time = time.time()
+    logger.log_request("GET", f"/api/projects/{project_id}/state")
+
+    # Get project
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state_file = os.path.join(project.path, ".novel-state.json")
+
+    try:
+        if not os.path.exists(state_file):
+            return {"api_key": "", "messages": []}
+
+        with open(state_file, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("GET", f"/api/projects/{project_id}/state", 200, duration_ms)
+
+        return {
+            "api_key": state.get("api_key", ""),
+            "messages": state.get("messages", [])
+        }
+    except Exception as e:
+        logger.log_exception(e, {"project_id": project_id}, "get_project_state")
+        duration_ms = (time.time() - start_time) * 1000
+        logger.log_response("GET", f"/api/projects/{project_id}/state", 500, duration_ms, str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to get project state: {str(e)}")
