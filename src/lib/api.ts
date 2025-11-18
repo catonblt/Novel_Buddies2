@@ -90,7 +90,8 @@ export const api = {
     projectId: string,
     message: string,
     agentType: AgentType,
-    apiKey: string
+    apiKey: string,
+    model: string
   ): Promise<ReadableStream<Uint8Array>> {
     const fullUrl = `${API_BASE_URL}/chat`;
     const startTime = performance.now();
@@ -98,11 +99,13 @@ export const api = {
     logger.agentInteraction(agentType, 'send_message', {
       project_id: projectId,
       message_length: message.length,
+      model,
     });
 
     logger.apiRequest('POST', fullUrl, {
       project_id: projectId,
       agent_type: agentType,
+      model,
     });
 
     try {
@@ -114,6 +117,7 @@ export const api = {
           message,
           agent_type: agentType,
           api_key: apiKey,
+          model,
         }),
       });
 

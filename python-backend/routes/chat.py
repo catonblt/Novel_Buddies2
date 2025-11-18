@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     message: str
     agent_type: str
     api_key: str
+    model: str = "claude-sonnet-4-5-20250929"  # Default to Sonnet 4.5
 
 
 async def stream_claude_response(
@@ -28,6 +29,7 @@ async def stream_claude_response(
     user_message: str,
     agent_type: str,
     api_key: str,
+    model: str,
     db: Session
 ) -> AsyncGenerator[str, None]:
     """Stream responses from Claude API"""
@@ -94,9 +96,10 @@ You can read and write files in the project directory. When you create or update
         # Stream response from Claude
         assistant_response = ""
         logger.log_agent_interaction(agent_type, "stream_start", len(user_message))
+        logger.info(f"Using model: {model}")
 
         with client.messages.stream(
-            model="claude-3-5-sonnet-20241022",
+            model=model,
             max_tokens=4096,
             system=full_system_prompt,
             messages=conversation,
@@ -149,7 +152,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     logger.info(f"Chat request for project {request.project_id} with agent {request.agent_type}")
     return StreamingResponse(
-        stream_claude_response(project, request.message, request.agent_type, request.api_key, db),
+        stream_claude_response(project, request.message, request.agent_type, request.api_key, request.model, db),
         media_type="text/event-stream"
     )
 

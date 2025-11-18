@@ -6,12 +6,10 @@ mod git_ops;
 
 use file_ops::*;
 use git_ops::*;
-use tauri::api::process::{Command, CommandEvent};
-use tauri::{Manager, Window};
-use std::sync::{Arc, Mutex};
 
-// Backend server state
-struct BackendProcess(Arc<Mutex<Option<std::process::Child>>>);
+// Only import process types when building for production
+#[cfg(not(debug_assertions))]
+use tauri::api::process::{Command, CommandEvent};
 
 #[tauri::command]
 fn check_backend_health() -> Result<bool, String> {
@@ -43,7 +41,7 @@ fn get_home_dir() -> Result<String, String> {
     }
 }
 
-fn start_backend_server(app_handle: tauri::AppHandle) {
+fn start_backend_server(_app_handle: tauri::AppHandle) {
     std::thread::spawn(move || {
         // In production, use the sidecar binary
         #[cfg(not(debug_assertions))]
