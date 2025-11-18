@@ -14,12 +14,14 @@ router = APIRouter()
 
 
 class FileOperation(BaseModel):
-    type: str  # 'create', 'update', 'delete', 'read'
+    type: str  # 'create', 'update', 'delete', 'append', 'insert', 'patch'
     path: str
     content: Optional[str] = None
     reason: str
     project_id: str
     agent_type: str
+    find_text: Optional[str] = None  # For patch operations
+    position: Optional[str] = None  # For insert operations (e.g., "after:## Section" or "before:## Section" or line number)
 
 
 class FileOperationResult(BaseModel):
@@ -54,12 +56,16 @@ def parse_file_operations(text: str) -> List[dict]:
         path_match = re.search(r'<path>(.*?)</path>', match, re.DOTALL)
         content_match = re.search(r'<content>(.*?)</content>', match, re.DOTALL)
         reason_match = re.search(r'<reason>(.*?)</reason>', match, re.DOTALL)
+        find_text_match = re.search(r'<find_text>(.*?)</find_text>', match, re.DOTALL)
+        position_match = re.search(r'<position>(.*?)</position>', match, re.DOTALL)
 
         if type_match and path_match:
             op['type'] = type_match.group(1).strip()
             op['path'] = path_match.group(1).strip()
             op['content'] = content_match.group(1).strip() if content_match else ''
             op['reason'] = reason_match.group(1).strip() if reason_match else 'No reason provided'
+            op['find_text'] = find_text_match.group(1).strip() if find_text_match else None
+            op['position'] = position_match.group(1).strip() if position_match else None
             operations.append(op)
 
     return operations
@@ -186,45 +192,121 @@ async def execute_file_operation(
 
             logger.info(message)
 
-        elif operation.type == "read":
-            # Read operation - return file content
+        elif operation.type == "append":
+            # Append content to end of file
+            if not os.path.exists(full_path):
+                # Create file if it doesn't exist
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.write(operation.content or '')
+                message = f"Created {operation.path} with appended content"
+            else:
+                with open(full_path, 'a', encoding='utf-8') as f:
+                    f.write(operation.content or '')
+                message = f"Appended content to {operation.path}"
+
+            logger.info(message)
+
+        elif operation.type == "insert":
+            # Insert content at specified position
             if not os.path.exists(full_path):
                 return FileOperationResult(
                     success=False,
                     path=operation.path,
-                    message=f"File not found: {operation.path}",
+                    message=f"File not found: {operation.path}. Cannot insert into non-existent file.",
                     operation=operation.type
                 )
 
-            if os.path.isdir(full_path):
+            with open(full_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+
+            new_content = existing_content
+            position = operation.position or "end"
+
+            if position == "start":
+                new_content = (operation.content or '') + existing_content
+            elif position == "end":
+                new_content = existing_content + (operation.content or '')
+            elif position.startswith("after:"):
+                marker = position[6:]
+                if marker in existing_content:
+                    new_content = existing_content.replace(marker, marker + (operation.content or ''), 1)
+                else:
+                    return FileOperationResult(
+                        success=False,
+                        path=operation.path,
+                        message=f"Marker text not found: '{marker}'",
+                        operation=operation.type
+                    )
+            elif position.startswith("before:"):
+                marker = position[7:]
+                if marker in existing_content:
+                    new_content = existing_content.replace(marker, (operation.content or '') + marker, 1)
+                else:
+                    return FileOperationResult(
+                        success=False,
+                        path=operation.path,
+                        message=f"Marker text not found: '{marker}'",
+                        operation=operation.type
+                    )
+            elif position.isdigit():
+                # Insert at specific line number
+                lines = existing_content.split('\n')
+                line_num = int(position) - 1  # Convert to 0-indexed
+                if 0 <= line_num <= len(lines):
+                    lines.insert(line_num, operation.content or '')
+                    new_content = '\n'.join(lines)
+                else:
+                    return FileOperationResult(
+                        success=False,
+                        path=operation.path,
+                        message=f"Invalid line number: {position}",
+                        operation=operation.type
+                    )
+
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            message = f"Inserted content in {operation.path}"
+
+            logger.info(message)
+
+        elif operation.type == "patch":
+            # Replace specific text in file
+            if not os.path.exists(full_path):
                 return FileOperationResult(
                     success=False,
                     path=operation.path,
-                    message=f"Path is a directory, not a file: {operation.path}",
+                    message=f"File not found: {operation.path}. Cannot patch non-existent file.",
                     operation=operation.type
                 )
 
-            try:
-                with open(full_path, 'r', encoding='utf-8') as f:
-                    file_content = f.read()
-
-                message = f"Read {operation.path} ({len(file_content)} chars)"
-                logger.info(message)
-
-                return FileOperationResult(
-                    success=True,
-                    path=operation.path,
-                    message=message,
-                    operation=operation.type,
-                    content=file_content
-                )
-            except Exception as e:
+            if not operation.find_text:
                 return FileOperationResult(
                     success=False,
                     path=operation.path,
-                    message=f"Failed to read file: {str(e)}",
+                    message="Patch operation requires find_text to specify what to replace.",
                     operation=operation.type
                 )
+
+            with open(full_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+
+            if operation.find_text not in existing_content:
+                return FileOperationResult(
+                    success=False,
+                    path=operation.path,
+                    message=f"Text to replace not found in file: '{operation.find_text[:50]}...'",
+                    operation=operation.type
+                )
+
+            # Replace the text
+            new_content = existing_content.replace(operation.find_text, operation.content or '', 1)
+
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            message = f"Patched {operation.path}"
+
+            logger.info(message)
 
         else:
             raise HTTPException(status_code=400, detail=f"Invalid operation type: {operation.type}")
@@ -333,7 +415,9 @@ async def parse_operations_from_response(
             "content": op.get('content', ''),
             "reason": op['reason'],
             "project_id": request.project_id,
-            "agent_type": request.agent_type
+            "agent_type": request.agent_type,
+            "find_text": op.get('find_text'),
+            "position": op.get('position')
         })
 
     logger.info(f"Found {len(formatted_ops)} file operations, require_confirmation={require_confirmation}")

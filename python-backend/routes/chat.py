@@ -7,7 +7,7 @@ import uuid
 import time
 import os
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict
 
 from models.database import Project, Message, AgentAnalysis, ContentVersion, get_db
 from agents.orchestrator import (
@@ -32,6 +32,128 @@ class ChatRequest(BaseModel):
     api_key: str
     model: str = "claude-sonnet-4-5-20250929"
     autonomy_level: int = 50
+
+
+def build_file_tree_for_agent(path: str, prefix: str = "") -> str:
+    """Build a text representation of the file tree for agent context"""
+    if not os.path.exists(path):
+        return ""
+
+    result = []
+    try:
+        items = sorted(os.listdir(path))
+        # Filter hidden files except .novel-project.json
+        items = [item for item in items if not item.startswith('.') or item == '.novel-project.json']
+
+        dirs = [item for item in items if os.path.isdir(os.path.join(path, item))]
+        files = [item for item in items if not os.path.isdir(os.path.join(path, item))]
+
+        # Add directories first
+        for i, dir_name in enumerate(dirs):
+            is_last_dir = (i == len(dirs) - 1) and not files
+            connector = "└── " if is_last_dir else "├── "
+            result.append(f"{prefix}{connector}{dir_name}/")
+
+            # Recursively add subdirectory contents
+            new_prefix = prefix + ("    " if is_last_dir else "│   ")
+            subtree = build_file_tree_for_agent(os.path.join(path, dir_name), new_prefix)
+            if subtree:
+                result.append(subtree)
+
+        # Add files
+        for i, file_name in enumerate(files):
+            is_last = (i == len(files) - 1)
+            connector = "└── " if is_last else "├── "
+            result.append(f"{prefix}{connector}{file_name}")
+
+    except Exception as e:
+        logger.error(f"Error building file tree: {e}")
+
+    return "\n".join(result)
+
+
+def get_project_file_contents(project_path: str, max_file_size: int = 10000) -> str:
+    """Read and return contents of key project files for agent context"""
+    # Priority files to include (in order of importance)
+    priority_files = [
+        "planning/story-outline.md",
+        "planning/chapter-breakdown.md",
+        "planning/themes.md",
+        "story-bible/continuity.md",
+        "story-bible/timeline.md",
+        "story-bible/world-notes.md",
+    ]
+
+    # Directories to scan for additional files
+    scan_dirs = [
+        ("characters", "Character Files"),
+        ("manuscript/chapters", "Chapter Files"),
+        ("manuscript/scenes", "Scene Files"),
+        ("feedback", "Feedback Files"),
+        ("research", "Research Files"),
+    ]
+
+    file_contents = []
+    total_size = 0
+    max_total_size = 50000  # Limit total content to avoid context overflow
+
+    # Read priority files first
+    for rel_path in priority_files:
+        full_path = os.path.join(project_path, rel_path)
+        if os.path.exists(full_path) and os.path.isfile(full_path):
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                if len(content) > max_file_size:
+                    content = content[:max_file_size] + "\n\n[... content truncated ...]"
+
+                if total_size + len(content) > max_total_size:
+                    break
+
+                file_contents.append(f"### File: {rel_path}\n```\n{content}\n```\n")
+                total_size += len(content)
+            except Exception as e:
+                logger.warning(f"Failed to read {rel_path}: {e}")
+
+    # Scan directories for additional files
+    for dir_rel_path, section_name in scan_dirs:
+        dir_full_path = os.path.join(project_path, dir_rel_path)
+        if not os.path.exists(dir_full_path) or not os.path.isdir(dir_full_path):
+            continue
+
+        try:
+            for file_name in sorted(os.listdir(dir_full_path)):
+                if file_name.startswith('.') or file_name.startswith('_'):
+                    continue
+
+                file_path = os.path.join(dir_full_path, file_name)
+                if not os.path.isfile(file_path):
+                    continue
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    if len(content) > max_file_size:
+                        content = content[:max_file_size] + "\n\n[... content truncated ...]"
+
+                    if total_size + len(content) > max_total_size:
+                        file_contents.append(f"\n[... additional files not loaded due to size limits ...]")
+                        return "\n".join(file_contents)
+
+                    rel_file_path = os.path.join(dir_rel_path, file_name)
+                    file_contents.append(f"### File: {rel_file_path}\n```\n{content}\n```\n")
+                    total_size += len(content)
+                except UnicodeDecodeError:
+                    # Skip binary files that can't be decoded as UTF-8
+                    logger.debug(f"Skipping binary file: {file_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to read {file_name}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to scan directory {dir_rel_path}: {e}")
+
+    return "\n".join(file_contents)
 
 
 async def stream_orchestrated_response(
@@ -80,7 +202,10 @@ async def stream_orchestrated_response(
         db.commit()
         logger.log_database_operation("insert", "messages", True)
 
-        # Build project context with metadata
+        # Build project context with file tree and contents
+        file_tree = build_file_tree_for_agent(project.path)
+        file_contents = get_project_file_contents(project.path)
+
         project_context = f"""
 
 PROJECT CONTEXT:
@@ -92,7 +217,18 @@ PROJECT CONTEXT:
 - Themes: {project.themes or 'Not yet defined'}
 - Setting: {project.setting or 'Not yet defined'}
 
-You can read and write files in the project directory. When you create or update files, specify the full path relative to the project root.
+PROJECT FILE STRUCTURE:
+```
+{file_tree}
+```
+
+EXISTING PROJECT FILES:
+The following files exist in the project. Use this information to understand the current state of the project and to make informed updates.
+
+{file_contents}
+
+You can create, update, and delete files in the project directory. When you create or update files, specify the path relative to the project root.
+To update an existing file, read its current content from the EXISTING PROJECT FILES section above, then provide the complete updated content in your file_operation.
 """
 
         # Load existing project files as context
@@ -193,7 +329,9 @@ You can read and write files in the project directory. When you create or update
                     "content": op.get('content', ''),
                     "reason": op['reason'],
                     "project_id": project.id,
-                    "agent_type": "story_advocate"
+                    "agent_type": "story_advocate",
+                    "find_text": op.get('find_text'),
+                    "position": op.get('position')
                 })
 
             logger.info(f"Found {len(formatted_ops)} file operations in response, require_confirmation={require_confirmation}")
