@@ -18,7 +18,7 @@ from agents.orchestrator import (
     GENERATOR_PROMPTS,
     REVIEWER_PROMPTS
 )
-from agents.prompts import FILE_OPERATION_INSTRUCTIONS
+from agents.prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS
 from agents.context_loader import build_project_context
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
@@ -120,7 +120,7 @@ You can read and write files in the project directory. When you create or update
         yield f"data: {json.dumps({'type': 'status', 'message': 'Story Advocate interpreting your request...', 'agent': 'story_advocate'})}\n\n"
 
         # Build the full system prompt for Story Advocate
-        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + project_context
+        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + LONG_CONTENT_INSTRUCTIONS + project_context
 
         # Add routing context based on request classification
         if primary_agents:

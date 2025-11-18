@@ -1,4 +1,4 @@
-from .prompts import FILE_OPERATION_INSTRUCTIONS
+from .prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS
 from .literary_agents import (
     LITERARY_AGENT_PROMPTS,
     AGENT_PERSONALITIES,
@@ -31,6 +31,7 @@ from .context_loader import (
 
 __all__ = [
     "FILE_OPERATION_INSTRUCTIONS",
+    "LONG_CONTENT_INSTRUCTIONS",
     "LITERARY_AGENT_PROMPTS",
     "AGENT_PERSONALITIES",
     "get_literary_agent_prompt",
