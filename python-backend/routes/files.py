@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -6,6 +6,7 @@ import aiofiles
 import time
 
 from utils.logger import logger
+from services.memory_service import get_memory_service
 
 router = APIRouter()
 
@@ -29,6 +30,7 @@ class FileReadRequest(BaseModel):
 class FileWriteRequest(BaseModel):
     path: str
     content: str
+    project_id: Optional[str] = None  # Optional project ID for memory indexing
 
 
 class FileListRequest(BaseModel):
@@ -136,8 +138,32 @@ async def read_file(request: FileReadRequest):
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
 
 
+def _index_file_to_memory(project_id: str, file_path: str, content: str, project_path: str):
+    """
+    Background task to index a file into project memory.
+
+    This is wrapped in try/except to ensure file saves never fail due to memory indexing errors.
+    """
+    try:
+        memory_service = get_memory_service()
+        if not memory_service.is_available():
+            return
+
+        # Get relative path from project root
+        if project_path and file_path.startswith(project_path):
+            rel_path = os.path.relpath(file_path, project_path)
+        else:
+            rel_path = os.path.basename(file_path)
+
+        memory_service.index_file(project_id, rel_path, content)
+        logger.debug(f"Indexed file {rel_path} to memory for project {project_id}")
+    except Exception as e:
+        # Log error but don't propagate - file save must succeed even if indexing fails
+        logger.error(f"Memory indexing failed for {file_path}: {str(e)}")
+
+
 @router.post("/write")
-async def write_file(request: FileWriteRequest):
+async def write_file(request: FileWriteRequest, background_tasks: BackgroundTasks):
     """Write content to a file"""
     start_time = time.time()
     logger.log_request("POST", "/api/files/write", body={"path": request.path, "content_size": len(request.content)})
@@ -152,6 +178,21 @@ async def write_file(request: FileWriteRequest):
             await f.write(request.content)
 
         logger.log_file_operation("write", request.path, True, {"size": len(request.content)})
+
+        # Index file to memory in background (if project_id is provided)
+        # This runs AFTER the response is sent, so failures don't affect the save
+        if request.project_id:
+            # Extract project path from file path (assume project_id maps to a parent directory)
+            # For more robust handling, we'd query the database for the project path
+            project_path = parent_dir
+            background_tasks.add_task(
+                _index_file_to_memory,
+                request.project_id,
+                request.path,
+                request.content,
+                project_path
+            )
+
         duration_ms = (time.time() - start_time) * 1000
         logger.log_response("POST", "/api/files/write", 200, duration_ms)
         return {"success": True, "message": "File written successfully"}
