@@ -27,7 +27,6 @@ class FileSystemWebSocket {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private projectId: string | null = null;
-  private isConnecting = false;
 
   connect(projectId: string) {
     // Don't reconnect if already connected to same project
@@ -42,7 +41,6 @@ class FileSystemWebSocket {
     }
 
     this.projectId = projectId;
-    this.isConnecting = true;
     this.reconnectAttempts = 0;
 
     this.createConnection();
@@ -56,7 +54,6 @@ class FileSystemWebSocket {
 
       this.ws.onopen = () => {
         console.log(`WebSocket connected for project: ${this.projectId}`);
-        this.isConnecting = false;
         this.reconnectAttempts = 0;
         this.clearReconnect();
       };
@@ -76,12 +73,10 @@ class FileSystemWebSocket {
 
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        this.isConnecting = false;
       };
 
       this.ws.onclose = (event) => {
         console.log(`WebSocket disconnected: ${event.code} ${event.reason}`);
-        this.isConnecting = false;
 
         // Only reconnect if we still have a project and haven't exceeded attempts
         if (this.projectId && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -90,7 +85,6 @@ class FileSystemWebSocket {
       };
     } catch (error) {
       console.error('Failed to create WebSocket connection:', error);
-      this.isConnecting = false;
     }
   }
 
