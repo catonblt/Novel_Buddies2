@@ -64,7 +64,8 @@ export default function AgentChat() {
         currentProject.id,
         input,
         selectedAgent,
-        settings.apiKey
+        settings.apiKey,
+        settings.model
       );
 
       const reader = stream.getReader();
