@@ -28,6 +28,17 @@ export default function ProjectExplorer() {
     }
   }, [fileRefreshCounter]);
 
+  // Auto-poll for file changes every 3 seconds
+  useEffect(() => {
+    if (!currentProject) return;
+
+    const pollInterval = setInterval(() => {
+      loadFiles(false); // Silent refresh without visual indicator
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [currentProject]);
+
   const loadFiles = async (showRefreshIndicator = false) => {
     if (!currentProject) return;
 
