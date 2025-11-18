@@ -1,53 +1,64 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useStore } from './lib/store';
-import { api } from './lib/api';
 import SetupWizard from './components/SetupWizard/SetupWizard';
 import Workspace from './components/Workspace/Workspace';
-import { Loader2 } from 'lucide-react';
+import WelcomeScreen from './components/WelcomeScreen/WelcomeScreen';
+import { Project } from './lib/types';
 
 function App() {
   const { currentProject, setCurrentProject } = useStore();
-  const [isLoading, setIsLoading] = useState(true);
   const [showSetup, setShowSetup] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(true);
 
-  useEffect(() => {
-    // Load projects and open the most recent one
-    const loadProjects = async () => {
-      try {
-        const projects = await api.listProjects();
-        if (projects.length > 0) {
-          // Load the most recently updated project
-          setCurrentProject(projects[0]);
-        } else {
-          setShowSetup(true);
-        }
-      } catch (error) {
-        console.error('Failed to load projects:', error);
-        setShowSetup(true);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  const handleSelectProject = (project: Project) => {
+    setCurrentProject(project);
+    setShowWelcome(false);
+    setShowSetup(false);
+  };
 
-    loadProjects();
-  }, [setCurrentProject]);
+  const handleCreateNew = () => {
+    setShowSetup(true);
+    setShowWelcome(false);
+  };
 
-  if (isLoading) {
+  const handleSetupComplete = () => {
+    setShowSetup(false);
+    setShowWelcome(false);
+  };
+
+  const handleBackToWelcome = () => {
+    setCurrentProject(null);
+    setShowWelcome(true);
+    setShowSetup(false);
+  };
+
+  // Show welcome screen on startup
+  if (showWelcome && !currentProject) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <div className="text-center">
-          <Loader2 className="mx-auto h-12 w-12 animate-spin text-primary" />
-          <p className="mt-4 text-muted-foreground">Loading Novel Writer...</p>
-        </div>
-      </div>
+      <WelcomeScreen
+        onSelectProject={handleSelectProject}
+        onCreateNew={handleCreateNew}
+      />
     );
   }
 
-  if (showSetup || !currentProject) {
-    return <SetupWizard onComplete={() => setShowSetup(false)} />;
+  // Show setup wizard when creating a new project
+  if (showSetup) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
-  return <Workspace />;
+  // Show workspace when a project is loaded
+  if (currentProject) {
+    return <Workspace onBackToWelcome={handleBackToWelcome} />;
+  }
+
+  // Fallback to welcome screen
+  return (
+    <WelcomeScreen
+      onSelectProject={handleSelectProject}
+      onCreateNew={handleCreateNew}
+    />
+  );
 }
 
 export default App;

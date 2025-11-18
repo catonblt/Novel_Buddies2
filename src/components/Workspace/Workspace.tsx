@@ -5,7 +5,11 @@ import ProjectExplorer from '../ProjectExplorer/ProjectExplorer';
 import Header from './Header';
 import SettingsDialog from './SettingsDialog';
 
-export default function Workspace() {
+interface WorkspaceProps {
+  onBackToWelcome?: () => void;
+}
+
+export default function Workspace({ onBackToWelcome }: WorkspaceProps) {
   const { currentProject } = useStore();
   const [showSettings, setShowSettings] = useState(false);
 
@@ -15,7 +19,7 @@ export default function Workspace() {
 
   return (
     <div className="flex h-screen flex-col bg-background">
-      <Header onOpenSettings={() => setShowSettings(true)} />
+      <Header onOpenSettings={() => setShowSettings(true)} onBackToWelcome={onBackToWelcome} />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Agent Chat - 60% */}
