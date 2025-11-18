@@ -24,6 +24,10 @@ from .orchestrator import (
     GENERATOR_AGENTS,
     REVIEWER_AGENTS
 )
+from .context_loader import (
+    ProjectContextLoader,
+    build_project_context
+)
 
 __all__ = [
     "FILE_OPERATION_INSTRUCTIONS",
@@ -45,5 +49,7 @@ __all__ = [
     "classify_request",
     "get_reviewers_for_content",
     "GENERATOR_AGENTS",
-    "REVIEWER_AGENTS"
+    "REVIEWER_AGENTS",
+    "ProjectContextLoader",
+    "build_project_context"
 ]

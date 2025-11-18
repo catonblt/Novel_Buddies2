@@ -19,6 +19,7 @@ from agents.orchestrator import (
     REVIEWER_PROMPTS
 )
 from agents.prompts import FILE_OPERATION_INSTRUCTIONS
+from agents.context_loader import build_project_context
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
 
@@ -79,7 +80,7 @@ async def stream_orchestrated_response(
         db.commit()
         logger.log_database_operation("insert", "messages", True)
 
-        # Build project context
+        # Build project context with metadata
         project_context = f"""
 
 PROJECT CONTEXT:
@@ -93,6 +94,24 @@ PROJECT CONTEXT:
 
 You can read and write files in the project directory. When you create or update files, specify the full path relative to the project root.
 """
+
+        # Load existing project files as context
+        # Determine agent type for smart context loading
+        _, primary_agents_for_context = classify_request(user_message)
+        agent_type_for_context = primary_agents_for_context[0] if primary_agents_for_context else "general"
+
+        try:
+            file_context = build_project_context(
+                project.path,
+                agent_type=agent_type_for_context,
+                user_message=user_message,
+                include_file_index=True
+            )
+            if file_context:
+                project_context += f"\n{file_context}"
+                logger.info(f"Loaded project file context for agent type: {agent_type_for_context}")
+        except Exception as e:
+            logger.warning(f"Failed to load project file context: {str(e)}")
 
         # Classify the request to determine which agents to use
         content_type, primary_agents = classify_request(user_message)

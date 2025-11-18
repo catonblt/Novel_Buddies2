@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 class FileOperation(BaseModel):
-    type: str  # 'create', 'update', 'delete'
+    type: str  # 'create', 'update', 'delete', 'read'
     path: str
     content: Optional[str] = None
     reason: str
@@ -27,6 +27,7 @@ class FileOperationResult(BaseModel):
     path: str
     message: str
     operation: str
+    content: Optional[str] = None  # For read operations
 
 
 class BatchFileOperations(BaseModel):
@@ -184,6 +185,46 @@ async def execute_file_operation(
                 message = f"File not found (already deleted?): {operation.path}"
 
             logger.info(message)
+
+        elif operation.type == "read":
+            # Read operation - return file content
+            if not os.path.exists(full_path):
+                return FileOperationResult(
+                    success=False,
+                    path=operation.path,
+                    message=f"File not found: {operation.path}",
+                    operation=operation.type
+                )
+
+            if os.path.isdir(full_path):
+                return FileOperationResult(
+                    success=False,
+                    path=operation.path,
+                    message=f"Path is a directory, not a file: {operation.path}",
+                    operation=operation.type
+                )
+
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+
+                message = f"Read {operation.path} ({len(file_content)} chars)"
+                logger.info(message)
+
+                return FileOperationResult(
+                    success=True,
+                    path=operation.path,
+                    message=message,
+                    operation=operation.type,
+                    content=file_content
+                )
+            except Exception as e:
+                return FileOperationResult(
+                    success=False,
+                    path=operation.path,
+                    message=f"Failed to read file: {str(e)}",
+                    operation=operation.type
+                )
 
         else:
             raise HTTPException(status_code=400, detail=f"Invalid operation type: {operation.type}")
