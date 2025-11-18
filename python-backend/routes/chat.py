@@ -10,13 +10,15 @@ import json
 from typing import AsyncGenerator
 
 from models.database import Project, Message, AgentAnalysis, ContentVersion, get_db
-from agents.prompts import AGENT_SYSTEM_PROMPTS
-from agents.pipeline import (
-    pipeline,
-    detect_content_type,
-    should_enhance_with_literary_agents,
-    format_analysis_for_display
+from agents.orchestrator import (
+    StoryOrchestrator,
+    STORY_ADVOCATE_ORCHESTRATOR_PROMPT,
+    classify_request,
+    get_reviewers_for_content,
+    GENERATOR_PROMPTS,
+    REVIEWER_PROMPTS
 )
+from agents.prompts import FILE_OPERATION_INSTRUCTIONS
 from utils.logger import logger
 from routes.file_operations import parse_file_operations
 
@@ -26,47 +28,22 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     project_id: str
     message: str
-    agent_type: str
     api_key: str
-    model: str = "claude-sonnet-4-5-20250929"  # Default to Sonnet 4.5
-    autonomy_level: int = 50  # 0-100, controls file operation confirmations
+    model: str = "claude-sonnet-4-5-20250929"
+    autonomy_level: int = 50
 
 
-async def stream_claude_response(
+async def stream_orchestrated_response(
     project: Project,
     user_message: str,
-    agent_type: str,
     api_key: str,
     model: str,
     autonomy_level: int,
     db: Session
 ) -> AsyncGenerator[str, None]:
-    """Stream responses from Claude API"""
+    """Stream responses through the Story Advocate orchestrator"""
     start_time = time.time()
-    logger.info(f"Starting agent interaction: {agent_type} for project {project.id}")
-
-    if agent_type not in AGENT_SYSTEM_PROMPTS:
-        logger.error(f"Invalid agent type requested: {agent_type}")
-        raise HTTPException(status_code=400, detail=f"Invalid agent type: {agent_type}")
-
-    system_prompt = AGENT_SYSTEM_PROMPTS[agent_type]
-
-    # Add project context to the system prompt
-    project_context = f"""
-
-PROJECT CONTEXT:
-- Title: {project.title}
-- Author: {project.author}
-- Genre: {project.genre}
-- Project Path: {project.path}
-- Premise: {project.premise or 'Not yet defined'}
-- Themes: {project.themes or 'Not yet defined'}
-- Setting: {project.setting or 'Not yet defined'}
-
-You can read and write files in the project directory. When you create or update files, specify the full path relative to the project root.
-"""
-
-    full_system_prompt = system_prompt + project_context
+    logger.info(f"Starting orchestrated interaction for project {project.id}")
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
@@ -102,25 +79,67 @@ You can read and write files in the project directory. When you create or update
         db.commit()
         logger.log_database_operation("insert", "messages", True)
 
+        # Build project context
+        project_context = f"""
+
+PROJECT CONTEXT:
+- Title: {project.title}
+- Author: {project.author}
+- Genre: {project.genre}
+- Project Path: {project.path}
+- Premise: {project.premise or 'Not yet defined'}
+- Themes: {project.themes or 'Not yet defined'}
+- Setting: {project.setting or 'Not yet defined'}
+
+You can read and write files in the project directory. When you create or update files, specify the full path relative to the project root.
+"""
+
+        # Classify the request to determine which agents to use
+        content_type, primary_agents = classify_request(user_message)
+
+        # Send initial status
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Story Advocate interpreting your request...', 'agent': 'story_advocate'})}\n\n"
+
+        # Build the full system prompt for Story Advocate
+        system_prompt = STORY_ADVOCATE_ORCHESTRATOR_PROMPT + FILE_OPERATION_INSTRUCTIONS + project_context
+
+        # Add routing context based on request classification
+        if primary_agents:
+            agent_list = ", ".join([a.replace("_", " ").title() for a in primary_agents])
+            system_prompt += f"\n\nFor this request, consider utilizing: {agent_list}"
+
+            # Send status about which agents are being engaged
+            for agent in primary_agents:
+                agent_name = agent.replace("_", " ").title()
+                yield f"data: {json.dumps({'type': 'status', 'message': f'{agent_name} contributing...', 'agent': agent})}\n\n"
+
+        # Get reviewers if this is substantial content
+        reviewers = get_reviewers_for_content(content_type)
+        if reviewers:
+            reviewer_list = ", ".join([r.replace("_", " ").title() for r in reviewers])
+            system_prompt += f"\n\nContent will be reviewed by: {reviewer_list}"
+
         # Stream response from Claude
         assistant_response = ""
-        logger.log_agent_interaction(agent_type, "stream_start", len(user_message))
+        logger.log_agent_interaction("story_advocate", "stream_start", len(user_message))
         logger.info(f"Using model: {model}")
+
+        # Send status that we're generating the response
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Generating response...', 'agent': 'story_advocate'})}\n\n"
 
         with client.messages.stream(
             model=model,
             max_tokens=4096,
-            system=full_system_prompt,
+            system=system_prompt,
             messages=conversation,
         ) as stream:
             for text in stream.text_stream:
                 assistant_response += text
-                # Send chunk to frontend
                 yield f"data: {json.dumps({'type': 'content', 'content': text})}\n\n"
 
         duration_ms = (time.time() - start_time) * 1000
         logger.log_agent_interaction(
-            agent_type,
+            "story_advocate",
             "stream_complete",
             len(user_message),
             len(assistant_response),
@@ -133,7 +152,7 @@ You can read and write files in the project directory. When you create or update
             project_id=project.id,
             role="assistant",
             content=assistant_response,
-            agent_type=agent_type,
+            agent_type="story_advocate",
             timestamp=int(time.time())
         )
         db.add(assistant_msg)
@@ -155,7 +174,7 @@ You can read and write files in the project directory. When you create or update
                     "content": op.get('content', ''),
                     "reason": op['reason'],
                     "project_id": project.id,
-                    "agent_type": agent_type
+                    "agent_type": "story_advocate"
                 })
 
             logger.info(f"Found {len(formatted_ops)} file operations in response, require_confirmation={require_confirmation}")
@@ -163,100 +182,30 @@ You can read and write files in the project directory. When you create or update
             # Send file operations to frontend
             yield f"data: {json.dumps({'type': 'file_operations', 'operations': formatted_ops, 'require_confirmation': require_confirmation})}\n\n"
 
-        # Check if literary agents should process this content
-        enable_literary = getattr(project, 'enable_literary_agents', True)
-        content_type = detect_content_type(user_message, {})
-
-        if enable_literary and should_enhance_with_literary_agents(content_type, assistant_response):
-            try:
-                logger.info(f"Running literary agents pipeline for content type: {content_type}")
-
-                # Build project context for agents
-                project_context = {
-                    "title": project.title,
-                    "author": project.author,
-                    "genre": project.genre,
-                    "premise": project.premise,
-                    "themes": project.themes,
-                    "setting": project.setting
-                }
-
-                # Notify that literary analysis is starting
-                yield f"data: {json.dumps({'type': 'literary_analysis_start', 'content_type': content_type})}\n\n"
-
-                # Run the pipeline
-                analysis_result = await pipeline.process_story_content(
-                    content=assistant_response,
-                    content_type=content_type,
-                    project_context=project_context,
-                    api_key=api_key,
-                    parallel=True
-                )
-
-                # Store analyses in database
-                analysis_id = str(uuid.uuid4())
-                for agent_type_name, analysis in analysis_result.get("agent_analyses", {}).items():
-                    agent_analysis = AgentAnalysis(
-                        id=str(uuid.uuid4()),
-                        project_id=project.id,
-                        content_id=analysis_id,
-                        content_type=content_type,
-                        agent_type=agent_type_name,
-                        analysis_result=json.dumps(analysis),
-                        timestamp=int(time.time())
-                    )
-                    db.add(agent_analysis)
-
-                # Store content version
-                content_version = ContentVersion(
-                    id=str(uuid.uuid4()),
-                    project_id=project.id,
-                    content_type=content_type,
-                    original_content=assistant_response,
-                    agent_analyses_id=analysis_id,
-                    timestamp=int(time.time())
-                )
-                db.add(content_version)
-                db.commit()
-
-                logger.log_database_operation("insert", "agent_analyses", True)
-                logger.info(f"Literary analysis complete in {analysis_result.get('processing_time_seconds', 0)}s")
-
-                # Format and send the analysis
-                formatted_analysis = format_analysis_for_display(analysis_result)
-
-                yield f"data: {json.dumps({'type': 'literary_analysis', 'analysis': formatted_analysis, 'raw_result': analysis_result})}\n\n"
-
-            except Exception as e:
-                logger.log_exception(e, {"project_id": project.id}, "literary_agents_pipeline")
-                # Don't fail the entire request if literary analysis fails
-                yield f"data: {json.dumps({'type': 'literary_analysis_error', 'error': str(e)})}\n\n"
-
         # Send completion signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     except Exception as e:
-        logger.log_agent_interaction(agent_type, "stream_error", len(user_message), error=str(e))
-        logger.log_exception(e, {"project_id": project.id, "agent_type": agent_type}, "stream_claude_response")
+        logger.log_agent_interaction("story_advocate", "stream_error", len(user_message), error=str(e))
+        logger.log_exception(e, {"project_id": project.id}, "stream_orchestrated_response")
         yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
 
 @router.post("")
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    """Chat with an AI agent"""
-    logger.log_request("POST", "/api/chat", query_params={"agent_type": request.agent_type})
+    """Chat with the Story Advocate orchestrator"""
+    logger.log_request("POST", "/api/chat", query_params={})
 
     project = db.query(Project).filter(Project.id == request.project_id).first()
     if not project:
         logger.warning(f"Project not found for chat: {request.project_id}")
         raise HTTPException(status_code=404, detail="Project not found")
 
-    logger.info(f"Chat request for project {request.project_id} with agent {request.agent_type}")
+    logger.info(f"Chat request for project {request.project_id} via Story Advocate")
     return StreamingResponse(
-        stream_claude_response(
+        stream_orchestrated_response(
             project,
             request.message,
-            request.agent_type,
             request.api_key,
             request.model,
             request.autonomy_level,
