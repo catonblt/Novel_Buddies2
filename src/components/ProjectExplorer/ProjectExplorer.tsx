@@ -4,14 +4,16 @@ import { api } from '@/lib/api';
 import { FileNode } from '@/lib/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
-import { Search, FileText, FolderOpen, Folder } from 'lucide-react';
+import { Search, FileText, FolderOpen, Folder, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import FilePreview from './FilePreview';
 
 export default function ProjectExplorer() {
-  const { currentProject, selectedFile, setSelectedFile } = useStore();
+  const { currentProject, selectedFile, setSelectedFile, fileRefreshCounter } = useStore();
   const [files, setFiles] = useState<FileNode[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     if (currentProject) {
@@ -19,18 +21,40 @@ export default function ProjectExplorer() {
     }
   }, [currentProject]);
 
-  const loadFiles = async () => {
+  // Listen for refresh triggers from WebSocket file changes
+  useEffect(() => {
+    if (currentProject && fileRefreshCounter > 0) {
+      loadFiles(true); // Refresh with visual feedback
+    }
+  }, [fileRefreshCounter]);
+
+  const loadFiles = async (showRefreshIndicator = false) => {
     if (!currentProject) return;
+
+    if (showRefreshIndicator) {
+      setIsRefreshing(true);
+    }
 
     try {
       const fileList = await api.listFiles(currentProject.path);
       setFiles(fileList);
 
-      // Auto-expand planning and manuscript folders
-      setExpandedFolders(new Set(['planning', 'manuscript', 'characters']));
+      // Auto-expand planning and manuscript folders on initial load
+      if (!showRefreshIndicator) {
+        setExpandedFolders(new Set(['planning', 'manuscript', 'characters']));
+      }
     } catch (error) {
       console.error('Failed to load files:', error);
+    } finally {
+      if (showRefreshIndicator) {
+        // Brief delay to show the animation
+        setTimeout(() => setIsRefreshing(false), 300);
+      }
     }
+  };
+
+  const handleManualRefresh = () => {
+    loadFiles(true);
   };
 
   const toggleFolder = (path: string) => {
@@ -120,14 +144,24 @@ export default function ProjectExplorer() {
     <div className="flex h-full flex-col">
       {/* Search */}
       <div className="border-b border-border p-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search files..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search files..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
 

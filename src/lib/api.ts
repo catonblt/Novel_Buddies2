@@ -91,7 +91,8 @@ export const api = {
     message: string,
     agentType: AgentType,
     apiKey: string,
-    model: string
+    model: string,
+    autonomyLevel: number = 50
   ): Promise<ReadableStream<Uint8Array>> {
     const fullUrl = `${API_BASE_URL}/chat`;
     const startTime = performance.now();
@@ -100,12 +101,14 @@ export const api = {
       project_id: projectId,
       message_length: message.length,
       model,
+      autonomy_level: autonomyLevel,
     });
 
     logger.apiRequest('POST', fullUrl, {
       project_id: projectId,
       agent_type: agentType,
       model,
+      autonomy_level: autonomyLevel,
     });
 
     try {
@@ -118,6 +121,7 @@ export const api = {
           agent_type: agentType,
           api_key: apiKey,
           model,
+          autonomy_level: autonomyLevel,
         }),
       });
 

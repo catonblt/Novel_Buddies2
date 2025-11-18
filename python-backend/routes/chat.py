@@ -12,6 +12,7 @@ from typing import AsyncGenerator
 from models.database import Project, Message, get_db
 from agents.prompts import AGENT_SYSTEM_PROMPTS
 from utils.logger import logger
+from routes.file_operations import parse_file_operations
 
 router = APIRouter()
 
@@ -22,6 +23,7 @@ class ChatRequest(BaseModel):
     agent_type: str
     api_key: str
     model: str = "claude-sonnet-4-5-20250929"  # Default to Sonnet 4.5
+    autonomy_level: int = 50  # 0-100, controls file operation confirmations
 
 
 async def stream_claude_response(
@@ -30,6 +32,7 @@ async def stream_claude_response(
     agent_type: str,
     api_key: str,
     model: str,
+    autonomy_level: int,
     db: Session
 ) -> AsyncGenerator[str, None]:
     """Stream responses from Claude API"""
@@ -131,6 +134,29 @@ You can read and write files in the project directory. When you create or update
         db.commit()
         logger.log_database_operation("insert", "messages", True)
 
+        # Parse file operations from the response
+        file_operations = parse_file_operations(assistant_response)
+        if file_operations:
+            # Determine if confirmation is needed based on autonomy level
+            require_confirmation = autonomy_level < 50
+
+            # Format operations for frontend
+            formatted_ops = []
+            for op in file_operations:
+                formatted_ops.append({
+                    "type": op['type'],
+                    "path": op['path'],
+                    "content": op.get('content', ''),
+                    "reason": op['reason'],
+                    "project_id": project.id,
+                    "agent_type": agent_type
+                })
+
+            logger.info(f"Found {len(formatted_ops)} file operations in response, require_confirmation={require_confirmation}")
+
+            # Send file operations to frontend
+            yield f"data: {json.dumps({'type': 'file_operations', 'operations': formatted_ops, 'require_confirmation': require_confirmation})}\n\n"
+
         # Send completion signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -152,7 +178,15 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     logger.info(f"Chat request for project {request.project_id} with agent {request.agent_type}")
     return StreamingResponse(
-        stream_claude_response(project, request.message, request.agent_type, request.api_key, request.model, db),
+        stream_claude_response(
+            project,
+            request.message,
+            request.agent_type,
+            request.api_key,
+            request.model,
+            request.autonomy_level,
+            db
+        ),
         media_type="text/event-stream"
     )
 

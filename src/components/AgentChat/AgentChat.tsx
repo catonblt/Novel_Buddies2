@@ -9,13 +9,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { Send, Loader2 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import AgentSelector from './AgentSelector';
+import FileOperationDialog, { FileOperation } from '@/components/FileOperationDialog';
+import { fileSystemWS } from '@/lib/websocket';
 
 export default function AgentChat() {
-  const { currentProject, messages, addMessage, settings } = useStore();
+  const { currentProject, messages, addMessage, settings, triggerFileRefresh, addNotification } = useStore();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentType>('story-architect');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // File operation state
+  const [pendingOperations, setPendingOperations] = useState<FileOperation[]>([]);
+  const [showFileOpDialog, setShowFileOpDialog] = useState(false);
 
   useEffect(() => {
     // Scroll to bottom when new messages arrive
@@ -23,6 +29,16 @@ export default function AgentChat() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // Connect WebSocket when project loads
+  useEffect(() => {
+    if (currentProject) {
+      fileSystemWS.connect(currentProject.id);
+    }
+    return () => {
+      fileSystemWS.disconnect();
+    };
+  }, [currentProject]);
 
   useEffect(() => {
     // Load existing messages for the project
@@ -65,7 +81,8 @@ export default function AgentChat() {
         input,
         selectedAgent,
         settings.apiKey,
-        settings.model
+        settings.model,
+        settings.autonomyLevel
       );
 
       const reader = stream.getReader();
@@ -86,6 +103,16 @@ export default function AgentChat() {
 
               if (data.type === 'content') {
                 assistantContent += data.content;
+              } else if (data.type === 'file_operations') {
+                // Handle file operations from agent
+                if (data.require_confirmation) {
+                  // Show confirmation dialog
+                  setPendingOperations(data.operations);
+                  setShowFileOpDialog(true);
+                } else {
+                  // Auto-execute without confirmation
+                  executeFileOperations(data.operations);
+                }
               } else if (data.type === 'done') {
                 const assistantMessage: Message = {
                   id: Date.now().toString(),
@@ -113,6 +140,63 @@ export default function AgentChat() {
     }
   };
 
+  const executeFileOperations = async (operations: FileOperation[]) => {
+    if (!currentProject) return;
+
+    try {
+      const response = await fetch('http://localhost:8000/file-operations/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operations: operations,
+          project_id: currentProject.id,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to execute file operations');
+      }
+
+      const result = await response.json();
+
+      // Show notification
+      addNotification({
+        id: Date.now().toString(),
+        type: result.successful === result.total ? 'success' : 'warning',
+        message: `File operations complete: ${result.successful}/${result.total} successful`,
+        timestamp: Date.now(),
+      });
+
+      // Refresh file explorer
+      triggerFileRefresh();
+    } catch (error) {
+      console.error('Failed to execute file operations:', error);
+      addNotification({
+        id: Date.now().toString(),
+        type: 'error',
+        message: 'Failed to execute file operations',
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  const handleFileOpConfirm = async (operations: FileOperation[]) => {
+    setShowFileOpDialog(false);
+    await executeFileOperations(operations);
+    setPendingOperations([]);
+  };
+
+  const handleFileOpReject = () => {
+    setShowFileOpDialog(false);
+    setPendingOperations([]);
+    addNotification({
+      id: Date.now().toString(),
+      type: 'info',
+      message: 'File operations rejected',
+      timestamp: Date.now(),
+    });
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -121,56 +205,67 @@ export default function AgentChat() {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Messages Area */}
-      <ScrollArea className="flex-1 p-6">
-        <div ref={scrollRef} className="space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-center text-muted-foreground">
-              <div>
-                <p className="text-lg font-semibold">Start a conversation</p>
-                <p className="mt-2 text-sm">
-                  Select an agent below and describe what you'd like to work on.
-                </p>
+    <>
+      <div className="flex h-full flex-col">
+        {/* Messages Area */}
+        <ScrollArea className="flex-1 p-6">
+          <div ref={scrollRef} className="space-y-4">
+            {messages.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-center text-muted-foreground">
+                <div>
+                  <p className="text-lg font-semibold">Start a conversation</p>
+                  <p className="mt-2 text-sm">
+                    Select an agent below and describe what you'd like to work on.
+                  </p>
+                </div>
               </div>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))
-          )}
-          {isStreaming && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>{AGENTS[selectedAgent].name} is thinking...</span>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+            ) : (
+              messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))
+            )}
+            {isStreaming && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>{AGENTS[selectedAgent].name} is thinking...</span>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
 
-      {/* Input Area */}
-      <div className="border-t border-border p-4">
-        <AgentSelector selected={selectedAgent} onSelect={setSelectedAgent} />
+        {/* Input Area */}
+        <div className="border-t border-border p-4">
+          <AgentSelector selected={selectedAgent} onSelect={setSelectedAgent} />
 
-        <div className="mt-3 flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyPress}
-            placeholder={`Message ${AGENTS[selectedAgent].name}...`}
-            className="min-h-[80px] resize-none"
-            disabled={isStreaming}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-            size="icon"
-            className="h-[80px] w-12"
-          >
-            <Send className="h-5 w-5" />
-          </Button>
+          <div className="mt-3 flex gap-2">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyPress}
+              placeholder={`Message ${AGENTS[selectedAgent].name}...`}
+              className="min-h-[80px] resize-none"
+              disabled={isStreaming}
+            />
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim() || isStreaming}
+              size="icon"
+              className="h-[80px] w-12"
+            >
+              <Send className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* File Operation Confirmation Dialog */}
+      <FileOperationDialog
+        operations={pendingOperations}
+        isOpen={showFileOpDialog}
+        onConfirm={handleFileOpConfirm}
+        onReject={handleFileOpReject}
+        agentType={selectedAgent}
+      />
+    </>
   );
 }

@@ -7,7 +7,7 @@ import time
 from dotenv import load_dotenv
 
 from models.database import init_db
-from routes import projects, chat, files, git
+from routes import projects, chat, files, git, file_operations, websocket
 from utils.logger import logger
 
 load_dotenv()
@@ -101,6 +101,8 @@ app.include_router(projects.router, prefix="/projects", tags=["projects"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(git.router, prefix="/git", tags=["git"])
+app.include_router(file_operations.router, prefix="/file-operations", tags=["file-operations"])
+app.include_router(websocket.router, tags=["websocket"])
 
 logger.info("All routers registered successfully")
 
