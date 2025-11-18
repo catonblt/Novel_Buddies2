@@ -89,6 +89,7 @@ def get_project_file_contents(project_path: str, max_file_size: int = 10000) -> 
         ("manuscript/chapters", "Chapter Files"),
         ("manuscript/scenes", "Scene Files"),
         ("feedback", "Feedback Files"),
+        ("research", "Research Files"),
     ]
 
     file_contents = []
@@ -143,6 +144,9 @@ def get_project_file_contents(project_path: str, max_file_size: int = 10000) -> 
                     rel_file_path = os.path.join(dir_rel_path, file_name)
                     file_contents.append(f"### File: {rel_file_path}\n```\n{content}\n```\n")
                     total_size += len(content)
+                except UnicodeDecodeError:
+                    # Skip binary files that can't be decoded as UTF-8
+                    logger.debug(f"Skipping binary file: {file_name}")
                 except Exception as e:
                     logger.warning(f"Failed to read {file_name}: {e}")
         except Exception as e:
@@ -306,7 +310,9 @@ To update an existing file, read its current content from the EXISTING PROJECT F
                     "content": op.get('content', ''),
                     "reason": op['reason'],
                     "project_id": project.id,
-                    "agent_type": "story_advocate"
+                    "agent_type": "story_advocate",
+                    "find_text": op.get('find_text'),
+                    "position": op.get('position')
                 })
 
             logger.info(f"Found {len(formatted_ops)} file operations in response, require_confirmation={require_confirmation}")
