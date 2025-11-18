@@ -4,13 +4,185 @@ from sqlalchemy.orm import Session
 import os
 import re
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from models.database import get_db, Project
 from utils.logger import logger
 
 router = APIRouter()
+
+
+def normalize_whitespace(text: str) -> str:
+    """
+    Normalize whitespace in text for fuzzy matching.
+    - Strips leading/trailing whitespace
+    - Collapses multiple spaces/tabs into single space
+    - Normalizes line endings
+    - Collapses multiple newlines into single newline
+    """
+    # Strip leading/trailing whitespace
+    text = text.strip()
+    # Normalize line endings to \n
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # Collapse multiple spaces/tabs into single space (but preserve newlines)
+    lines = text.split('\n')
+    normalized_lines = []
+    for line in lines:
+        # Collapse multiple spaces/tabs within the line
+        normalized_line = re.sub(r'[ \t]+', ' ', line.strip())
+        normalized_lines.append(normalized_line)
+    # Collapse multiple blank lines into single blank line
+    text = '\n'.join(normalized_lines)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
+def find_best_match(content: str, find_text: str) -> Optional[Tuple[int, int, float]]:
+    """
+    Find the best matching substring in content for find_text.
+
+    Returns:
+        Tuple of (start_index, end_index, similarity_score) or None if no good match.
+    """
+    normalized_find = normalize_whitespace(find_text)
+    normalized_content = normalize_whitespace(content)
+
+    # First, try exact match on normalized text
+    if normalized_find in normalized_content:
+        # Find the corresponding position in original content
+        # We need to map back to original positions
+        pass
+
+    # Use sliding window with SequenceMatcher to find best match
+    find_len = len(normalized_find)
+    best_match = None
+    best_ratio = 0.0
+
+    # Split content into chunks roughly the size of find_text
+    # with some tolerance for length variation
+    min_len = max(1, int(find_len * 0.7))
+    max_len = int(find_len * 1.5)
+
+    # Scan through content with overlapping windows
+    i = 0
+    content_len = len(content)
+
+    while i < content_len:
+        for window_size in range(min_len, min(max_len, content_len - i) + 1, max(1, (max_len - min_len) // 10)):
+            window = content[i:i + window_size]
+            normalized_window = normalize_whitespace(window)
+
+            # Quick length check
+            if abs(len(normalized_window) - len(normalized_find)) > len(normalized_find) * 0.3:
+                continue
+
+            ratio = SequenceMatcher(None, normalized_find, normalized_window).ratio()
+
+            if ratio > best_ratio and ratio > 0.85:  # Threshold for "good enough" match
+                best_ratio = ratio
+                best_match = (i, i + window_size, ratio)
+
+                # If we found a very good match, we can stop early
+                if ratio > 0.98:
+                    return best_match
+
+        # Move forward, but use smaller steps for better accuracy
+        i += max(1, min_len // 4)
+
+    return best_match
+
+
+def fuzzy_patch(file_content: str, find_text: str, replace_text: str) -> Tuple[bool, str, str]:
+    """
+    Perform a fuzzy patch operation that tolerates whitespace differences.
+
+    This function tries to find and replace text even when there are minor
+    whitespace differences between the search text and the actual content.
+
+    Args:
+        file_content: The original file content
+        find_text: The text to find (may have whitespace differences)
+        replace_text: The text to replace with
+
+    Returns:
+        Tuple of (success, new_content, message)
+    """
+    # Step 1: Try exact match first
+    if find_text in file_content:
+        new_content = file_content.replace(find_text, replace_text, 1)
+        return True, new_content, "Exact match found and replaced"
+
+    # Step 2: Try with stripped whitespace
+    stripped_find = find_text.strip()
+    if stripped_find in file_content:
+        new_content = file_content.replace(stripped_find, replace_text, 1)
+        return True, new_content, "Match found after stripping whitespace"
+
+    # Step 3: Try normalized match
+    normalized_find = normalize_whitespace(find_text)
+    normalized_content = normalize_whitespace(file_content)
+
+    if normalized_find in normalized_content:
+        # Find the position in normalized content
+        norm_start = normalized_content.find(normalized_find)
+        norm_end = norm_start + len(normalized_find)
+
+        # Map back to original content positions
+        # This is approximate - we find the corresponding region
+        original_start = find_original_position(file_content, normalized_content, norm_start)
+        original_end = find_original_position(file_content, normalized_content, norm_end)
+
+        if original_start is not None and original_end is not None:
+            new_content = file_content[:original_start] + replace_text + file_content[original_end:]
+            return True, new_content, "Match found using normalized whitespace comparison"
+
+    # Step 4: Try fuzzy matching with similarity threshold
+    best_match = find_best_match(file_content, find_text)
+
+    if best_match:
+        start, end, ratio = best_match
+        matched_text = file_content[start:end]
+        new_content = file_content[:start] + replace_text + file_content[end:]
+        return True, new_content, f"Fuzzy match found (similarity: {ratio:.1%}). Matched text: '{matched_text[:50]}...'"
+
+    return False, file_content, "No match found even with fuzzy matching"
+
+
+def find_original_position(original: str, normalized: str, norm_pos: int) -> Optional[int]:
+    """
+    Map a position in normalized text back to the original text.
+
+    This is an approximation that works by comparing character ratios.
+    """
+    if norm_pos == 0:
+        return 0
+    if norm_pos >= len(normalized):
+        return len(original)
+
+    # Calculate approximate position ratio
+    ratio = norm_pos / len(normalized)
+    approx_pos = int(ratio * len(original))
+
+    # Adjust to find a reasonable boundary (avoid splitting words)
+    # Search nearby for whitespace boundaries
+    search_range = min(50, len(original) // 10)
+
+    best_pos = approx_pos
+    min_diff = float('inf')
+
+    for offset in range(-search_range, search_range + 1):
+        test_pos = approx_pos + offset
+        if 0 <= test_pos <= len(original):
+            # Check if this position gives us a good normalized match
+            test_normalized = normalize_whitespace(original[:test_pos])
+            diff = abs(len(test_normalized) - norm_pos)
+            if diff < min_diff:
+                min_diff = diff
+                best_pos = test_pos
+
+    return best_pos
 
 
 class FileOperation(BaseModel):
@@ -271,7 +443,7 @@ async def execute_file_operation(
             logger.info(message)
 
         elif operation.type == "patch":
-            # Replace specific text in file
+            # Replace specific text in file using fuzzy matching
             if not os.path.exists(full_path):
                 return FileOperationResult(
                     success=False,
@@ -291,20 +463,24 @@ async def execute_file_operation(
             with open(full_path, 'r', encoding='utf-8') as f:
                 existing_content = f.read()
 
-            if operation.find_text not in existing_content:
+            # Use fuzzy_patch for whitespace-tolerant matching
+            success, new_content, match_message = fuzzy_patch(
+                existing_content,
+                operation.find_text,
+                operation.content or ''
+            )
+
+            if not success:
                 return FileOperationResult(
                     success=False,
                     path=operation.path,
-                    message=f"Text to replace not found in file: '{operation.find_text[:50]}...'",
+                    message=f"Text to replace not found in file: '{operation.find_text[:50]}...'. {match_message}",
                     operation=operation.type
                 )
 
-            # Replace the text
-            new_content = existing_content.replace(operation.find_text, operation.content or '', 1)
-
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
-            message = f"Patched {operation.path}"
+            message = f"Patched {operation.path}. {match_message}"
 
             logger.info(message)
 
