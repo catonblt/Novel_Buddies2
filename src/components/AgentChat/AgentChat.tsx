@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { AGENTS } from '@/lib/agents';
+import { getApiUrl } from '@/lib/config';
 import { AgentType, Message } from '@/lib/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -144,7 +145,7 @@ export default function AgentChat() {
     if (!currentProject) return;
 
     try {
-      const response = await fetch('http://localhost:8000/file-operations/batch', {
+      const response = await fetch(getApiUrl('/file-operations/batch'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

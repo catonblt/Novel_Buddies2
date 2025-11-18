@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { logger } from '@/lib/logger';
+import { getApiUrl } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -145,7 +146,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       // Initialize git repository (don't fail project creation if this fails)
       try {
         logger.info('Initializing git repository', { path: finalPath });
-        const response = await fetch('http://localhost:8000/git/init', {
+        const response = await fetch(getApiUrl('/git/init'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repo_path: finalPath }),

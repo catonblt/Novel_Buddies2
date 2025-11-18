@@ -1,4 +1,5 @@
 import { useStore } from './store';
+import { getWsUrl } from './config';
 
 interface FileChangeEvent {
   type: 'file_change';
@@ -50,7 +51,7 @@ class FileSystemWebSocket {
     if (!this.projectId) return;
 
     try {
-      this.ws = new WebSocket(`ws://localhost:8000/ws/${this.projectId}`);
+      this.ws = new WebSocket(getWsUrl(`/ws/${this.projectId}`));
 
       this.ws.onopen = () => {
         console.log(`WebSocket connected for project: ${this.projectId}`);

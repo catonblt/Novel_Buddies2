@@ -1,7 +1,6 @@
 import { Project, Message, AgentType } from './types';
 import { logger } from './logger';
-
-const API_BASE_URL = 'http://localhost:8000';
+import { API_BASE_URL } from './config';
 
 /**
  * Wrapper for API calls with logging and error handling

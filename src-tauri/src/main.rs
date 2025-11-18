@@ -11,13 +11,44 @@ use git_ops::*;
 #[cfg(not(debug_assertions))]
 use tauri::api::process::{Command, CommandEvent};
 
+const BACKEND_HOST: &str = "127.0.0.1";
+const BACKEND_PORT: u16 = 8000;
+
 #[tauri::command]
 fn check_backend_health() -> Result<bool, String> {
     // Simple health check - try to connect to the backend
-    match std::net::TcpStream::connect("127.0.0.1:8000") {
+    match std::net::TcpStream::connect(format!("{}:{}", BACKEND_HOST, BACKEND_PORT)) {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+/// Wait for the backend to become healthy with exponential backoff
+fn wait_for_backend_health(max_attempts: u32, initial_delay_ms: u64) -> bool {
+    let mut delay = initial_delay_ms;
+
+    for attempt in 1..=max_attempts {
+        println!("Checking backend health (attempt {}/{})", attempt, max_attempts);
+
+        match std::net::TcpStream::connect(format!("{}:{}", BACKEND_HOST, BACKEND_PORT)) {
+            Ok(_) => {
+                println!("Backend is healthy and ready!");
+                return true;
+            }
+            Err(e) => {
+                if attempt < max_attempts {
+                    println!("Backend not ready yet ({}), retrying in {}ms...", e, delay);
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    // Exponential backoff with max of 5 seconds
+                    delay = std::cmp::min(delay * 2, 5000);
+                } else {
+                    eprintln!("Backend failed to start after {} attempts", max_attempts);
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[tauri::command]
@@ -46,9 +77,12 @@ fn start_backend_server(_app_handle: tauri::AppHandle) {
         // In production, use the sidecar binary
         #[cfg(not(debug_assertions))]
         {
+            let port_arg = BACKEND_PORT.to_string();
+            println!("Starting backend server on {}:{}", BACKEND_HOST, BACKEND_PORT);
+
             let (mut rx, _child) = Command::new_sidecar("novel-writer-backend")
                 .expect("failed to create `novel-writer-backend` binary command")
-                .args(&["--port", "8000"])
+                .args(&["--host", BACKEND_HOST, "--port", &port_arg])
                 .spawn()
                 .expect("Failed to spawn backend server");
 
@@ -72,7 +106,7 @@ fn start_backend_server(_app_handle: tauri::AppHandle) {
         #[cfg(debug_assertions)]
         {
             println!("Development mode: Please start the Python backend manually:");
-            println!("  cd python-backend && uvicorn main:app --reload --port 8000");
+            println!("  cd python-backend && uvicorn main:app --reload --port {}", BACKEND_PORT);
         }
     });
 }
@@ -83,8 +117,21 @@ fn main() {
             // Start the backend server
             start_backend_server(app.handle());
 
-            // Wait a moment for the server to start
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            // Wait for the backend to become healthy with exponential backoff
+            // Try up to 10 times, starting with 500ms delay
+            // This allows for up to ~30 seconds total wait time
+            #[cfg(not(debug_assertions))]
+            {
+                if !wait_for_backend_health(10, 500) {
+                    eprintln!("Warning: Backend server may not be ready. The application will continue but some features may not work.");
+                }
+            }
+
+            // In development, just wait a bit for manual backend startup
+            #[cfg(debug_assertions)]
+            {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
 
             Ok(())
         })
