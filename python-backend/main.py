@@ -54,7 +54,7 @@ async def log_requests(request: Request, call_next):
         )
         raise
 
-# CORS middleware - Allow all localhost variations for development
+# CORS middleware - Allow all localhost variations for development and production
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -62,7 +62,9 @@ app.add_middleware(
         "http://127.0.0.1:1420",
         "http://localhost:5173",  # Vite default port
         "http://127.0.0.1:5173",
-        "tauri://localhost",
+        "tauri://localhost",      # Tauri development
+        "https://tauri.localhost", # Tauri production (v1.5+)
+        "http://tauri.localhost",  # Tauri production fallback
         "http://localhost",
         "http://127.0.0.1"
     ],
