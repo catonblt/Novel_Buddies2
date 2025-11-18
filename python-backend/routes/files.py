@@ -15,6 +15,11 @@ class FileInfo(BaseModel):
     path: str
     isDirectory: bool
     size: Optional[int] = None
+    children: Optional[List['FileInfo']] = None
+
+
+# Update forward reference for recursive type
+FileInfo.model_rebuild()
 
 
 class FileReadRequest(BaseModel):
@@ -34,8 +39,13 @@ class FileResponse(BaseModel):
     content: str
 
 
-def build_file_tree(path: str) -> List[FileInfo]:
-    """Build a file tree for the given directory"""
+def build_file_tree(path: str, recursive: bool = True) -> List[FileInfo]:
+    """Build a file tree for the given directory
+
+    Args:
+        path: Directory path to list
+        recursive: If True, recursively build children for directories
+    """
     items = []
 
     if not os.path.exists(path):
@@ -52,11 +62,17 @@ def build_file_tree(path: str) -> List[FileInfo]:
             is_dir = os.path.isdir(item_path)
             size = None if is_dir else os.path.getsize(item_path)
 
+            # Recursively build children for directories
+            children = None
+            if is_dir and recursive:
+                children = build_file_tree(item_path, recursive=True)
+
             items.append(FileInfo(
                 name=item,
                 path=item_path,
                 isDirectory=is_dir,
-                size=size
+                size=size,
+                children=children
             ))
 
         # Sort: directories first, then files, both alphabetically
