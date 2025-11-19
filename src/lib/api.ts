@@ -205,4 +205,20 @@ export const api = {
       commit_id: commitId,
     });
   },
+
+  // Memory operations
+  async rebuildProjectMemory(projectId: string): Promise<{ status: string; project_id: string; message: string }> {
+    logger.userAction('rebuild_project_memory', { projectId });
+    return apiCall<{ status: string; project_id: string; message: string }>(
+      'POST',
+      `/memory/${projectId}/reindex`
+    );
+  },
+
+  async getMemoryStats(projectId: string): Promise<{ project_id: string; document_count: number; is_available: boolean }> {
+    return apiCall<{ project_id: string; document_count: number; is_available: boolean }>(
+      'GET',
+      `/memory/${projectId}/stats`
+    );
+  },
 };

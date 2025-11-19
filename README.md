@@ -8,11 +8,14 @@
 ## ✨ Features
 
 - **5 Specialized AI Agents**: Story Architect, Character & Dialogue Specialist, Prose & Atmosphere Writer, Research & Continuity Guardian, and Editorial Reviewer
+- **Continuity Brain (Local RAG)**: ChromaDB-powered semantic search for project-wide context awareness - agents automatically recall relevant information from your entire project
+- **Knowledge Base Rebuild**: One-click re-indexing of all project files for accurate semantic search
 - **Beautiful Dark-Mode UI**: Modern, distraction-free writing environment
 - **Built-in Version Control**: Every change is tracked with Git
 - **Autonomous File Management**: Agents can create, read, and modify project files
 - **Real-time Streaming**: See agent responses as they're generated
 - **Project Organization**: Structured folder system for planning, characters, manuscript, and more
+- **File Search & Browser**: Quick fuzzy search and folder navigation within projects
 
 ## 🚀 Quick Start
 
@@ -136,6 +139,20 @@ If you prefer manual setup:
 - **Edit externally**: Files are standard markdown - open in your favorite editor
 - **Version history**: Click the history icon to view and restore previous versions
 
+### Knowledge Base (Continuity Brain)
+
+The app includes a local RAG (Retrieval-Augmented Generation) system that gives agents contextual awareness of your entire project:
+
+- **Automatic Indexing**: All markdown and text files are indexed when you create or load a project
+- **Semantic Search**: Agents can find relevant content using meaning, not just keywords
+- **Rebuild on Demand**: If you edit files externally or the knowledge base gets out of sync:
+  1. Open **Settings** (gear icon)
+  2. Scroll to **Knowledge Base** section
+  3. Click **Rebuild Knowledge Base**
+  4. Wait for the background process to complete
+
+The rebuild process indexes ~10 files per second. No external API costs - everything runs locally using ChromaDB.
+
 ## 🏗️ Architecture
 
 - **Frontend**: React + TypeScript + Tailwind CSS + shadcn/ui
@@ -143,6 +160,7 @@ If you prefer manual setup:
 - **Backend**: Python FastAPI
 - **AI**: Anthropic Claude API
 - **Database**: SQLite
+- **Vector DB**: ChromaDB (local RAG/semantic search)
 - **Version Control**: Git (libgit2)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical documentation.
@@ -160,7 +178,8 @@ novel-writer/
 ├── python-backend/        # FastAPI server
 │   ├── agents/            # AI agent system
 │   ├── models/            # Database models
-│   └── routes/            # API endpoints
+│   ├── routes/            # API endpoints
+│   └── services/          # Memory service (ChromaDB)
 ├── docs/                  # Documentation
 └── public/                # Static assets
 ```
