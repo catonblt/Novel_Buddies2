@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
+import { api } from '@/lib/api';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +15,7 @@ import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
+import { Loader2, RefreshCw } from 'lucide-react';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -21,11 +23,45 @@ interface SettingsDialogProps {
 }
 
 export default function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const { settings, updateSettings } = useStore();
+  const { settings, updateSettings, currentProject, addNotification } = useStore();
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [model, setModel] = useState(settings.model);
   const [autonomyLevel, setAutonomyLevel] = useState(settings.autonomyLevel);
   const [autoCommit, setAutoCommit] = useState(settings.autoCommit);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleRebuildMemory = async () => {
+    if (!currentProject) {
+      addNotification({
+        id: Date.now().toString(),
+        type: 'warning',
+        message: 'No project selected',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const result = await api.rebuildProjectMemory(currentProject.id);
+      addNotification({
+        id: Date.now().toString(),
+        type: 'success',
+        message: result.status || 'Memory rebuild started in the background',
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      addNotification({
+        id: Date.now().toString(),
+        type: 'error',
+        message: 'Failed to trigger memory rebuild',
+        timestamp: Date.now(),
+      });
+    } finally {
+      // Re-enable button after 2 seconds for visual feedback
+      setTimeout(() => setIsSyncing(false), 2000);
+    }
+  };
 
   useEffect(() => {
     setApiKey(settings.apiKey);
@@ -115,6 +151,36 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
                 checked={autoCommit}
                 onCheckedChange={setAutoCommit}
               />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-4">
+            <h4 className="text-sm font-medium">Knowledge Base</h4>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Rebuild the project's knowledge base to ensure agents have access to the latest content.
+                This indexes all markdown and text files for semantic search.
+              </p>
+              <Button
+                variant="outline"
+                onClick={handleRebuildMemory}
+                disabled={isSyncing || !currentProject}
+                className="w-full"
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Rebuilding...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Rebuild Knowledge Base
+                  </>
+                )}
+              </Button>
             </div>
           </div>
 
