@@ -30,7 +30,7 @@ def _index_file_to_memory_background(project_id: str, file_path: str, rel_path: 
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        memory_service.index_file(project_id, rel_path, content)
+        memory_service.index_file(project_path, project_id, rel_path, content)
         logger.debug(f"Indexed file {rel_path} to memory for project {project_id}")
     except Exception as e:
         # Log error but don't propagate - file operation must succeed even if indexing fails
@@ -170,7 +170,7 @@ def fuzzy_patch(file_content: str, find_text: str, replace_text: str) -> Tuple[b
         new_content = file_content[:start] + replace_text + file_content[end:]
         return True, new_content, f"Fuzzy match found (similarity: {ratio:.1%}). Matched text: '{matched_text[:50]}...'"
 
-    return False, file_content, "No match found even with fuzzy matching"
+    return False, file_content, "Target text not found. Please quote the text EXACTLY as it appears in the file, including all whitespace, newlines, and punctuation."
 
 
 def find_original_position(original: str, normalized: str, norm_pos: int) -> Optional[int]:

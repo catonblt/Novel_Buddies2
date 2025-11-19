@@ -7,6 +7,11 @@ into the context window.
 
 Uses ChromaDB with the default local embedding function (all-MiniLM-L6-v2)
 to avoid external API costs for embeddings.
+
+ARCHITECTURE: Each project stores its memory database locally at:
+    <project_path>/.novel_buddies/memory_db/
+
+This ensures memory travels with the project when moved between computers.
 """
 
 import os
@@ -27,50 +32,88 @@ except ImportError:
 
 class ProjectMemory:
     """
-    Manages vector-based memory for a project using ChromaDB.
+    Manages vector-based memory for projects using ChromaDB.
 
-    Each project gets its own isolated collection for storing and
-    retrieving document chunks.
+    Each project gets its own isolated database stored within the project folder
+    at .novel_buddies/memory_db for portability.
     """
 
-    def __init__(self, persistence_path: str = "./chroma_db"):
+    def __init__(self):
         """
         Initialize the ProjectMemory service.
 
-        Args:
-            persistence_path: Directory path for ChromaDB persistence.
-                            Defaults to ./chroma_db in the current working directory.
+        No global persistence path is used - each project stores its own database.
         """
-        self.persistence_path = persistence_path
-        self._client = None
-        self._initialized = False
+        # Cache for ChromaDB clients, keyed by project_path
+        self._clients: Dict[str, Any] = {}
+        self._chromadb_available = CHROMADB_AVAILABLE
 
         if not CHROMADB_AVAILABLE:
             logger.warning("ChromaDB not available. Memory features disabled.")
-            return
+        else:
+            logger.info("ProjectMemory service initialized (project-local storage mode)")
+
+    def is_available(self) -> bool:
+        """Check if the memory service is available."""
+        return self._chromadb_available
+
+    def _get_project_db_path(self, project_path: str) -> str:
+        """
+        Get the database path for a specific project.
+
+        Args:
+            project_path: Path to the project directory
+
+        Returns:
+            Path to the project's memory database directory
+        """
+        return os.path.join(project_path, ".novel_buddies", "memory_db")
+
+    def _get_client(self, project_path: str):
+        """
+        Get or create a ChromaDB client for the specified project.
+
+        Args:
+            project_path: Path to the project directory
+
+        Returns:
+            ChromaDB PersistentClient or None if unavailable
+        """
+        if not self.is_available():
+            return None
+
+        # Normalize path for consistent caching
+        project_path = os.path.normpath(project_path)
+
+        # Check cache
+        if project_path in self._clients:
+            return self._clients[project_path]
 
         try:
-            # Ensure persistence directory exists
-            os.makedirs(persistence_path, exist_ok=True)
+            # Get the project-specific database path
+            db_path = self._get_project_db_path(project_path)
 
-            # Initialize ChromaDB with persistence
-            self._client = chromadb.PersistentClient(
-                path=persistence_path,
+            # Ensure the directory exists
+            os.makedirs(db_path, exist_ok=True)
+
+            # Create a new client for this project
+            client = chromadb.PersistentClient(
+                path=db_path,
                 settings=Settings(
                     anonymized_telemetry=False,
                     allow_reset=True
                 )
             )
-            self._initialized = True
-            logger.info(f"ProjectMemory initialized with persistence at {persistence_path}")
+
+            # Cache the client
+            self._clients[project_path] = client
+            logger.debug(f"Created ChromaDB client for project at {project_path}")
+
+            return client
 
         except Exception as e:
-            logger.error(f"Failed to initialize ChromaDB: {str(e)}")
-            self._initialized = False
-
-    def is_available(self) -> bool:
-        """Check if the memory service is available and initialized."""
-        return self._initialized and self._client is not None
+            logger.error(f"Failed to create ChromaDB client for {project_path}: {str(e)}")
+            return None
 
     def _get_collection_name(self, project_id: str) -> str:
         """
@@ -98,22 +141,24 @@ class ProjectMemory:
 
         return safe_name
 
-    def _get_collection(self, project_id: str):
+    def _get_collection(self, project_path: str, project_id: str):
         """
         Get or create a collection for the specified project.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
 
         Returns:
             ChromaDB Collection object or None if unavailable
         """
-        if not self.is_available():
+        client = self._get_client(project_path)
+        if client is None:
             return None
 
         try:
             collection_name = self._get_collection_name(project_id)
-            collection = self._client.get_or_create_collection(
+            collection = client.get_or_create_collection(
                 name=collection_name,
                 metadata={"project_id": project_id}
             )
@@ -171,6 +216,7 @@ class ProjectMemory:
 
     def index_file(
         self,
+        project_path: str,
         project_id: str,
         file_path: str,
         content: str,
@@ -181,6 +227,7 @@ class ProjectMemory:
         Index a file's content into the project's vector store.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
             file_path: Relative path to the file within the project
             content: The text content to index
@@ -195,7 +242,7 @@ class ProjectMemory:
             return False
 
         try:
-            collection = self._get_collection(project_id)
+            collection = self._get_collection(project_path, project_id)
             if collection is None:
                 return False
 
@@ -262,6 +309,7 @@ class ProjectMemory:
 
     def query_project(
         self,
+        project_path: str,
         project_id: str,
         query_text: str,
         n_results: int = 5
@@ -270,6 +318,7 @@ class ProjectMemory:
         Query the project's memory for relevant content.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
             query_text: The search query
             n_results: Maximum number of results to return
@@ -281,7 +330,7 @@ class ProjectMemory:
             return "Memory service is not available."
 
         try:
-            collection = self._get_collection(project_id)
+            collection = self._get_collection(project_path, project_id)
             if collection is None:
                 return "Could not access project memory."
 
@@ -319,11 +368,12 @@ class ProjectMemory:
             logger.error(f"Failed to query project {project_id}: {str(e)}")
             return f"Error searching memory: {str(e)}"
 
-    def delete_file_memory(self, project_id: str, file_path: str) -> bool:
+    def delete_file_memory(self, project_path: str, project_id: str, file_path: str) -> bool:
         """
         Delete all memory chunks for a specific file.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
             file_path: The file path to remove from memory
 
@@ -334,7 +384,7 @@ class ProjectMemory:
             return False
 
         try:
-            collection = self._get_collection(project_id)
+            collection = self._get_collection(project_path, project_id)
             if collection is None:
                 return False
 
@@ -350,11 +400,12 @@ class ProjectMemory:
             logger.error(f"Failed to delete file memory for {file_path}: {str(e)}")
             return False
 
-    def delete_project_memory(self, project_id: str) -> bool:
+    def delete_project_memory(self, project_path: str, project_id: str) -> bool:
         """
         Delete all memory for a project (reset/wipe the collection).
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
 
         Returns:
@@ -364,32 +415,38 @@ class ProjectMemory:
             return False
 
         try:
+            client = self._get_client(project_path)
+            if client is None:
+                return False
+
             collection_name = self._get_collection_name(project_id)
-            self._client.delete_collection(collection_name)
+            client.delete_collection(collection_name)
             logger.info(f"Deleted memory collection for project {project_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete memory for project {project_id}: {str(e)}")
             return False
 
-    def reset_project_memory(self, project_id: str) -> bool:
+    def reset_project_memory(self, project_path: str, project_id: str) -> bool:
         """
         Reset/wipe the collection for a fresh re-index.
         Alias for delete_project_memory for clearer intent.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
 
         Returns:
             True if reset succeeded, False otherwise
         """
-        return self.delete_project_memory(project_id)
+        return self.delete_project_memory(project_path, project_id)
 
-    def get_project_stats(self, project_id: str) -> Dict[str, Any]:
+    def get_project_stats(self, project_path: str, project_id: str) -> Dict[str, Any]:
         """
         Get statistics about a project's indexed memory.
 
         Args:
+            project_path: Path to the project directory
             project_id: The project identifier
 
         Returns:
@@ -399,7 +456,7 @@ class ProjectMemory:
             return {"available": False, "error": "Memory service not available"}
 
         try:
-            collection = self._get_collection(project_id)
+            collection = self._get_collection(project_path, project_id)
             if collection is None:
                 return {"available": False, "error": "Could not access collection"}
 
@@ -417,14 +474,16 @@ class ProjectMemory:
                     "available": True,
                     "total_chunks": count,
                     "indexed_files": len(sources),
-                    "sources": list(sources)
+                    "sources": list(sources),
+                    "db_path": self._get_project_db_path(project_path)
                 }
             else:
                 return {
                     "available": True,
                     "total_chunks": 0,
                     "indexed_files": 0,
-                    "sources": []
+                    "sources": [],
+                    "db_path": self._get_project_db_path(project_path)
                 }
 
         except Exception as e:
@@ -436,12 +495,9 @@ class ProjectMemory:
 _memory_service_instance = None
 
 
-def get_memory_service(persistence_path: str = "./chroma_db") -> ProjectMemory:
+def get_memory_service() -> ProjectMemory:
     """
     Get the singleton ProjectMemory instance.
-
-    Args:
-        persistence_path: Path for ChromaDB persistence
 
     Returns:
         ProjectMemory instance
@@ -449,6 +505,6 @@ def get_memory_service(persistence_path: str = "./chroma_db") -> ProjectMemory:
     global _memory_service_instance
 
     if _memory_service_instance is None:
-        _memory_service_instance = ProjectMemory(persistence_path)
+        _memory_service_instance = ProjectMemory()
 
     return _memory_service_instance

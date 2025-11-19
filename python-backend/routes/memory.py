@@ -93,7 +93,7 @@ async def _reindex_project_background(project_id: str, project_path: str):
             with open(full_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            success = memory_service.index_file(project_id, rel_path, content)
+            success = memory_service.index_file(project_path, project_id, rel_path, content)
             if success:
                 indexed_count += 1
             else:
@@ -170,6 +170,7 @@ async def query_project_memory(
         )
 
     results = memory_service.query_project(
+        project_path=project.path,
         project_id=project_id,
         query_text=request.query,
         n_results=request.n_results
@@ -195,7 +196,7 @@ async def get_memory_stats(
         raise HTTPException(status_code=404, detail="Project not found")
 
     memory_service = get_memory_service()
-    stats = memory_service.get_project_stats(project_id)
+    stats = memory_service.get_project_stats(project.path, project_id)
 
     return {
         "project_id": project_id,
@@ -225,7 +226,7 @@ async def reset_project_memory(
             detail="Memory service is not available. ChromaDB may not be installed."
         )
 
-    success = memory_service.reset_project_memory(project_id)
+    success = memory_service.reset_project_memory(project.path, project_id)
 
     if success:
         return {

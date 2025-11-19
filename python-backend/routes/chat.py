@@ -23,6 +23,7 @@ from agents.orchestrator import (
 from agents.prompts import FILE_OPERATION_INSTRUCTIONS, LONG_CONTENT_INSTRUCTIONS, MEMORY_TOOL_INSTRUCTIONS
 from agents.context_loader import build_project_context
 from utils.logger import logger
+from utils.token_manager import get_token_manager
 from routes.file_operations import parse_file_operations
 from services.memory_service import get_memory_service
 import re
@@ -344,11 +345,12 @@ def parse_memory_searches(text: str) -> List[dict]:
     return searches
 
 
-def execute_memory_searches(project_id: str, searches: List[dict]) -> str:
+def execute_memory_searches(project_path: str, project_id: str, searches: List[dict]) -> str:
     """
     Execute memory searches and return formatted results.
 
     Args:
+        project_path: Path to the project directory
         project_id: The project identifier
         searches: List of search dictionaries with 'query' and 'reason' keys
 
@@ -371,7 +373,7 @@ def execute_memory_searches(project_id: str, searches: List[dict]) -> str:
             continue
 
         try:
-            search_results = memory_service.query_project(project_id, query, n_results=5)
+            search_results = memory_service.query_project(project_path, project_id, query, n_results=5)
             results.append(f"**Memory Search: {query}**")
             if reason:
                 results.append(f"*Reason: {reason}*")
@@ -483,7 +485,27 @@ async def stream_orchestrated_response(
 
         # Build project context with file tree and contents
         file_tree = build_file_tree_for_agent(project.path)
-        file_contents = get_project_file_contents(project.path)
+
+        # Use TokenManager for smart context assembly
+        token_manager = get_token_manager()
+
+        # Extract active file from user message if mentioned (e.g., "in chapter-01.md")
+        active_file = None
+        import re as re_module
+        file_mention = re_module.search(r'\b(manuscript/chapters/[\w-]+\.md|story-bible/[\w-]+\.md)\b', user_message)
+        if file_mention:
+            active_file = file_mention.group(1)
+
+        # Assemble context with token budgeting
+        file_contents, context_metadata = token_manager.assemble_context(
+            project_path=project.path,
+            chat_history=conversation[:-1],  # Exclude current message
+            active_file_path=active_file,
+            max_history_messages=10
+        )
+
+        logger.info(f"Token budget: {context_metadata.get('total_tokens', 0)} total tokens, "
+                   f"{context_metadata.get('files_included', 0)} files included")
 
         project_context = f"""
 
