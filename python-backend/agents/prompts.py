@@ -74,6 +74,20 @@ The new text to replace it with
   <reason>Brief explanation of what is being changed</reason>
 </file_operation>
 
+7. GLOBAL-REPLACE - Replace ALL occurrences across files (best for renaming characters/terms)
+<global_replace>
+  <target_path>manuscript/chapters</target_path>
+  <find_text>Bob</find_text>
+  <replace_text>Robert</replace_text>
+  <case_sensitive>true</case_sensitive>
+  <use_regex>false</use_regex>
+  <reason>Renaming character from Bob to Robert throughout the manuscript</reason>
+</global_replace>
+
+CRITICAL: When renaming characters with regex, use word boundaries to avoid partial matches:
+- To rename "Bob" without affecting "Bobby": use find_text="\\bBob\\b" with use_regex=true
+- This prevents "Bobby" from becoming "Roberty"
+
 PROJECT FILE CONTEXT:
 You have been provided with the content of existing project files below. Use this information to:
 - Maintain consistency with established characters, plot, and world-building
@@ -161,15 +175,27 @@ Former mentor turned adversary.
   <reason>Creating antagonist profile based on story outline</reason>
 </file_operation>
 
+Example 5 - Rename a character throughout the entire project:
+<global_replace>
+  <target_path>.</target_path>
+  <find_text>\\bSarah\\b</find_text>
+  <replace_text>Elena</replace_text>
+  <case_sensitive>true</case_sensitive>
+  <use_regex>true</use_regex>
+  <reason>Renaming character from Sarah to Elena across all project files</reason>
+</global_replace>
+
 When the user asks you to create, write, or modify files, USE THESE TAGS to actually perform the operation. Don't just describe what you would write - actually write it using the file_operation tags.
 
 BEST PRACTICES:
 - Use PATCH for small, targeted changes (fixing typos, updating specific details)
 - Use APPEND for adding new content to the end (new chapters, additional notes)
 - Use INSERT for adding content at specific locations (new scenes, additional sections)
+- Use GLOBAL-REPLACE for renaming characters/terms across multiple files (NOT patch!)
 - Use CREATE for new files only
 - Use UPDATE only when you need to restructure the entire file
 - Always check the existing file content before making changes
+- When renaming characters, ALWAYS use regex with word boundaries to prevent partial matches
 """
 
 # Instructions for handling long content and continuations
@@ -349,6 +375,67 @@ Returns relevant text chunks with their source file locations.""",
             }
         },
         "required": ["query"]
+    }
+}
+
+# JSON Tool Definition for Global Find-Replace
+# Use this tool for renaming characters, updating terminology, or fixing consistent errors
+GLOBAL_REPLACE_TOOL_DEFINITION = {
+    "name": "global_find_replace",
+    "description": """Perform a global find-and-replace across a file or entire directory.
+
+Use this tool to:
+- Rename characters throughout the manuscript (e.g., "Bob" -> "Robert")
+- Update terminology consistently (e.g., "magic wand" -> "arcane staff")
+- Fix consistent typos or errors across multiple files
+- Change place names, item names, or any recurring text
+
+CRITICAL SAFETY NOTE - Word Boundaries:
+When renaming characters or terms that might be substrings of other words,
+ALWAYS use regex with word boundaries to avoid partial matches:
+
+Example: To rename "Bob" without affecting "Bobby" or "Bobcat":
+  - find_text: "\\bBob\\b"
+  - use_regex: true
+
+This prevents "Bobby" from becoming "Roberty".
+
+Returns a summary with:
+- files_modified: Number of files that were changed
+- occurrences_replaced: Total number of replacements made
+- modified_files: List of file paths that were modified
+- errors: Any errors encountered""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "project_id": {
+                "type": "string",
+                "description": "The project ID"
+            },
+            "target_path": {
+                "type": "string",
+                "description": "Path to a specific file OR directory to process. Use '.' or '' for entire project, or a specific path like 'manuscript/chapters' or 'characters/elena.md'"
+            },
+            "find_text": {
+                "type": "string",
+                "description": "Text to find. Use regex patterns like '\\bBob\\b' for word boundaries when use_regex is true."
+            },
+            "replace_text": {
+                "type": "string",
+                "description": "Text to replace with"
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Whether the search should be case-sensitive (default: true)",
+                "default": True
+            },
+            "use_regex": {
+                "type": "boolean",
+                "description": "Whether find_text is a regex pattern (default: false). Enable this for word boundaries.",
+                "default": False
+            }
+        },
+        "required": ["project_id", "target_path", "find_text", "replace_text"]
     }
 }
 

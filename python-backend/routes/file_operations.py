@@ -239,6 +239,22 @@ class ParseOperationsRequest(BaseModel):
     autonomy_level: int
 
 
+class GlobalReplaceRequest(BaseModel):
+    project_id: str
+    target_path: str  # Can be a specific file OR a directory
+    find_text: str
+    replace_text: str
+    case_sensitive: bool = True
+    use_regex: bool = False  # For power users/agents
+
+
+class GlobalReplaceResult(BaseModel):
+    files_modified: int
+    occurrences_replaced: int
+    modified_files: List[str]
+    errors: List[str]
+
+
 def parse_file_operations(text: str) -> List[dict]:
     """Extract file operations from agent response text"""
     operations = []
@@ -668,3 +684,161 @@ async def validate_project_path(
             "valid": False,
             "error": e.detail
         }
+
+
+def _is_text_file(file_path: str) -> bool:
+    """Check if a file is likely a text file based on extension"""
+    text_extensions = {
+        '.md', '.txt', '.json', '.yaml', '.yml', '.xml', '.html', '.css', '.js',
+        '.py', '.rst', '.csv', '.log', '.ini', '.cfg', '.conf', '.toml'
+    }
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in text_extensions or ext == ''
+
+
+def _perform_global_replace(
+    content: str,
+    find_text: str,
+    replace_text: str,
+    case_sensitive: bool,
+    use_regex: bool
+) -> Tuple[str, int]:
+    """
+    Perform global replacement in content.
+
+    Returns:
+        Tuple of (new_content, count_of_replacements)
+    """
+    if use_regex:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(find_text, flags)
+            # Count occurrences before replacing
+            matches = pattern.findall(content)
+            count = len(matches)
+            new_content = pattern.sub(replace_text, content)
+            return new_content, count
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {str(e)}")
+    else:
+        # Simple string replacement
+        if case_sensitive:
+            count = content.count(find_text)
+            new_content = content.replace(find_text, replace_text)
+        else:
+            # Case-insensitive string replacement
+            pattern = re.compile(re.escape(find_text), re.IGNORECASE)
+            matches = pattern.findall(content)
+            count = len(matches)
+            new_content = pattern.sub(replace_text, content)
+
+        return new_content, count
+
+
+@router.post("/global-replace", response_model=GlobalReplaceResult)
+async def global_replace(
+    request: GlobalReplaceRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Perform global find-and-replace across a file or directory.
+
+    This endpoint replaces ALL occurrences of find_text with replace_text.
+    Ideal for renaming characters, updating terminology, or fixing consistent errors.
+
+    SAFETY NOTE: When using regex, consider using word boundaries (\\b) to avoid
+    partial matches. For example, to rename "Bob" without affecting "Bobby",
+    use: find_text="\\bBob\\b" with use_regex=True.
+    """
+    logger.info(f"Global replace request: '{request.find_text}' -> '{request.replace_text}' in {request.target_path}")
+
+    # Get project
+    project = db.query(Project).filter(Project.id == request.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate and build full path
+    full_path = validate_path(project.path, request.target_path)
+
+    files_modified = 0
+    occurrences_replaced = 0
+    modified_files = []
+    errors = []
+
+    # Collect files to process
+    files_to_process = []
+
+    if os.path.isfile(full_path):
+        # Single file
+        files_to_process.append((full_path, request.target_path))
+    elif os.path.isdir(full_path):
+        # Directory - walk all files
+        for root, _, files in os.walk(full_path):
+            for filename in files:
+                file_full_path = os.path.join(root, filename)
+                # Get relative path from project root
+                rel_path = os.path.relpath(file_full_path, project.path)
+
+                # Only process text files
+                if _is_text_file(filename):
+                    files_to_process.append((file_full_path, rel_path))
+    else:
+        raise HTTPException(status_code=404, detail=f"Path not found: {request.target_path}")
+
+    # Process each file
+    for file_full_path, rel_path in files_to_process:
+        try:
+            # Read file content
+            with open(file_full_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Perform replacement
+            new_content, count = _perform_global_replace(
+                content,
+                request.find_text,
+                request.replace_text,
+                request.case_sensitive,
+                request.use_regex
+            )
+
+            # Only write if changes were made
+            if count > 0:
+                with open(file_full_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+
+                files_modified += 1
+                occurrences_replaced += count
+                modified_files.append(rel_path)
+
+                # Index modified file to memory in background
+                background_tasks.add_task(
+                    _index_file_to_memory_background,
+                    request.project_id,
+                    file_full_path,
+                    rel_path,
+                    project.path
+                )
+
+                logger.debug(f"Replaced {count} occurrence(s) in {rel_path}")
+
+        except UnicodeDecodeError:
+            # Skip binary files
+            logger.debug(f"Skipping binary file: {rel_path}")
+            continue
+        except ValueError as e:
+            # Regex error
+            errors.append(f"{rel_path}: {str(e)}")
+            logger.error(f"Error processing {rel_path}: {str(e)}")
+        except Exception as e:
+            errors.append(f"{rel_path}: {str(e)}")
+            logger.error(f"Error processing {rel_path}: {str(e)}")
+
+    logger.info(f"Global replace complete: {files_modified} files modified, {occurrences_replaced} occurrences replaced")
+
+    return GlobalReplaceResult(
+        files_modified=files_modified,
+        occurrences_replaced=occurrences_replaced,
+        modified_files=modified_files,
+        errors=errors
+    )
